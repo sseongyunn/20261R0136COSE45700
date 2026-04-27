@@ -39,7 +39,13 @@ def _auth_response(user_id: object, email: str) -> AuthResponse:
 @router.post("/signup", response_model=AuthResponse)
 def signup(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
     email = payload.email.lower().strip()
-    password_hash = hash_password(payload.password)
+    try:
+        password_hash = hash_password(payload.password)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
     try:
         user_row = db.execute(

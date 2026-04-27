@@ -3,22 +3,31 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import UUID
 
+import bcrypt
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 
 from app.config import settings
 
 
 ALGORITHM = "HS256"
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+
+def _password_bytes(password: str) -> bytes:
+    data = password.encode("utf-8")
+    if len(data) > 72:
+        raise ValueError("Password must be 72 bytes or fewer")
+    return data
 
 
 def hash_password(password: str) -> str:
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
-    return pwd_context.verify(password, password_hash)
+    try:
+        return bcrypt.checkpw(_password_bytes(password), password_hash.encode("utf-8"))
+    except ValueError:
+        return False
 
 
 def create_access_token(user_id: UUID | str, email: str) -> str:

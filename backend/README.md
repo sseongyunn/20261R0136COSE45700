@@ -51,13 +51,13 @@ tmux new -s backend
 Test:
 
 ```bash
-curl http://50.17.40.158:5173/health
+curl http://100.30.223.95:5173/health
 ```
 
 API docs:
 
 ```text
-http://50.17.40.158:5173/docs
+http://100.30.223.95:5173/docs
 ```
 
 ## Run Worker
