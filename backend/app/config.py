@@ -23,6 +23,14 @@ class Settings:
     s3_bucket: str
     jwt_secret: str
     varco_api_key: Optional[str]
+    varco_api_key_header: str
+    varco_submit_url: str
+    varco_result_url_template: str
+    varco_target_face_type: str
+    varco_target_face_num: int
+    varco_generate_texture: bool
+    varco_seed: int
+    varco_convert_image_to_png: bool
     mock_varco: bool
     access_token_expire_hours: int = 24
     upload_url_expire_seconds: int = 900
@@ -64,7 +72,21 @@ def get_settings() -> Settings:
         aws_region=os.getenv("AWS_REGION", "us-east-1"),
         s3_bucket=s3_bucket,
         jwt_secret=jwt_secret,
-        varco_api_key=os.getenv("VARCO_API_KEY"),
+        varco_api_key=os.getenv("VARCO_API_KEY") or os.getenv("OPENAPI_KEY"),
+        varco_api_key_header=os.getenv("VARCO_API_KEY_HEADER", "OPENAPI_KEY"),
+        varco_submit_url=os.getenv(
+            "VARCO_SUBMIT_URL",
+            "https://openapi.ai.nc.com/3d/varco/v1/image-to-3d",
+        ),
+        varco_result_url_template=os.getenv(
+            "VARCO_RESULT_URL_TEMPLATE",
+            "https://openapi.ai.nc.com/inference/result/{request_id}",
+        ),
+        varco_target_face_type=os.getenv("VARCO_TARGET_FACE_TYPE", "tri"),
+        varco_target_face_num=_int_env("VARCO_TARGET_FACE_NUM", 300000),
+        varco_generate_texture=_bool_env("VARCO_GENERATE_TEXTURE", default=True),
+        varco_seed=_int_env("VARCO_SEED", -1),
+        varco_convert_image_to_png=_bool_env("VARCO_CONVERT_IMAGE_TO_PNG", default=True),
         mock_varco=_bool_env("MOCK_VARCO", default=False),
         access_token_expire_hours=_int_env("ACCESS_TOKEN_EXPIRE_HOURS", 24),
         upload_url_expire_seconds=_int_env("UPLOAD_URL_EXPIRE_SECONDS", 900),

@@ -18,7 +18,7 @@ from app.config import settings
 from app.database import SessionLocal
 from app.services import varco_service
 from app.services.s3_service import (
-    create_presigned_download_url,
+    download_object_bytes,
     furniture_asset_model_key,
     upload_model_bytes,
 )
@@ -32,6 +32,7 @@ logger = logging.getLogger("generation-worker")
 
 SUCCESS_STATUSES = {"succeeded", "success", "completed", "complete", "done"}
 FAILED_STATUSES = {"failed", "failure", "error", "cancelled", "canceled"}
+IN_PROGRESS_STATUSES = {"queued", "submitted", "processing", "running", "pending"}
 
 
 def claim_queued_job() -> Optional[dict]:
@@ -201,6 +202,10 @@ def wait_for_varco_model(provider_request_id: str) -> str:
         if provider_status in FAILED_STATUSES:
             raise RuntimeError(f"VARCO generation failed: {result}")
 
+        model_url = varco_service.extract_model_url(result)
+        if model_url and provider_status not in IN_PROGRESS_STATUSES:
+            return model_url
+
         time.sleep(settings.varco_poll_seconds)
 
     raise TimeoutError(f"VARCO request timed out after {settings.varco_poll_timeout_seconds}s")
@@ -216,12 +221,19 @@ def process_job(job: dict) -> None:
         model_bytes = create_mock_glb()
         logger.info("MOCK_VARCO enabled. Created mock model for job %s", job_id)
     else:
-        image_url = create_presigned_download_url(
+        source_image_bytes = download_object_bytes(
             bucket=job["source_s3_bucket"],
             key=job["source_s3_key"],
-            expires_in=settings.download_url_expire_seconds,
         )
-        provider_request_id = varco_service.submit_image_to_3d(image_url)
+        image_bytes, filename, content_type = varco_service.prepare_image_for_submission(
+            source_image_bytes,
+            job["source_s3_key"],
+        )
+        provider_request_id = varco_service.submit_image_to_3d(
+            image_bytes,
+            filename=filename,
+            content_type=content_type,
+        )
         update_provider_request_id(job_id, provider_request_id)
         update_job_status(job_id, "submitted")
 

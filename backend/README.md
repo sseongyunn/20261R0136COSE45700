@@ -12,7 +12,17 @@ AWS_REGION=us-east-1
 S3_BUCKET=ku-hys-06
 VARCO_API_KEY=<VARCO_API_KEY>
 JWT_SECRET=<JWT_SECRET>
-MOCK_VARCO=true
+MOCK_VARCO=false
+
+# VARCO defaults from the Image to 3D docs. Keep these unless VARCO changes them.
+VARCO_API_KEY_HEADER=OPENAPI_KEY
+VARCO_SUBMIT_URL=https://openapi.ai.nc.com/3d/varco/v1/image-to-3d
+VARCO_RESULT_URL_TEMPLATE=https://openapi.ai.nc.com/inference/result/{request_id}
+VARCO_TARGET_FACE_TYPE=tri
+VARCO_TARGET_FACE_NUM=300000
+VARCO_GENERATE_TEXTURE=true
+VARCO_SEED=-1
+VARCO_CONVERT_IMAGE_TO_PNG=true
 ```
 
 Do not set `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` on EC2. boto3 uses the EC2 IAM instance profile.
@@ -76,12 +86,17 @@ tmux new -s worker
 
 ## VARCO Integration
 
-`app/services/varco_service.py` isolates provider details. Before disabling `MOCK_VARCO`, update:
+`app/services/varco_service.py` follows the VARCO Image to 3D API docs:
 
-- `VARCO_SUBMIT_URL`
-- `VARCO_RESULT_URL_TEMPLATE`
-- submit request body fields
-- submit response request-id field
-- status/result model URL field names
+- `POST https://openapi.ai.nc.com/3d/varco/v1/image-to-3d`
+- header: `OPENAPI_KEY: <key>`
+- multipart file field: `image`
+- form fields: `target_face_type`, `target_face_num`, `generate_texture`, `seed`
+- result polling: `GET https://openapi.ai.nc.com/inference/result/{request_id}`
+- submit response field: `requestId`
+- result model field: `model_url`
+
+The documented input format is PNG, so the worker converts uploaded images to
+PNG before sending them to VARCO when `VARCO_CONVERT_IMAGE_TO_PNG=true`.
 
 For pipeline testing, keep `MOCK_VARCO=true`. The worker will upload a minimal GLB file to S3 and create a `furniture_assets` row.

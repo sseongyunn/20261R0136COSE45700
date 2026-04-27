@@ -56,3 +56,8 @@ def upload_model_bytes(bucket: str, key: str, data: bytes) -> None:
         Body=data,
         ContentType="model/gltf-binary",
     )
+
+
+def download_object_bytes(bucket: str, key: str) -> bytes:
+    response = s3_client().get_object(Bucket=bucket, Key=key)
+    return response["Body"].read()

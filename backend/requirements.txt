@@ -9,3 +9,4 @@ python-jose[cryptography]
 requests
 pydantic[email]
 python-multipart
+Pillow
