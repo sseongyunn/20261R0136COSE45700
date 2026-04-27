@@ -24,7 +24,7 @@ class SourceImageCompleteRequest(BaseModel):
 
 class SourceImageCompleteResponse(BaseModel):
     sourceImageId: str
-    success: bool
+    status: str
 
 
 @router.post("/complete", response_model=SourceImageCompleteResponse)
@@ -53,7 +53,7 @@ def complete_source_image_upload(
     if existing is not None:
         if str(existing["user_id"]) != current_user["id"]:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not allowed")
-        return SourceImageCompleteResponse(sourceImageId=str(existing["id"]), success=True)
+        return SourceImageCompleteResponse(sourceImageId=str(existing["id"]), status="completed")
 
     try:
         db.execute(
@@ -78,4 +78,4 @@ def complete_source_image_upload(
             detail="Source image already exists",
         ) from exc
 
-    return SourceImageCompleteResponse(sourceImageId=payload.sourceImageId, success=True)
+    return SourceImageCompleteResponse(sourceImageId=payload.sourceImageId, status="completed")

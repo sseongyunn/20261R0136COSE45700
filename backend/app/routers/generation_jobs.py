@@ -19,9 +19,9 @@ class CreateGenerationJobRequest(BaseModel):
     sourceImageId: str
     name: Optional[str] = Field(default=None, max_length=200)
     category: Optional[str] = Field(default=None, max_length=100)
-    widthCm: Optional[float] = None
-    heightCm: Optional[float] = None
-    depthCm: Optional[float] = None
+    widthCm: Optional[float] = Field(default=None, gt=0)
+    heightCm: Optional[float] = Field(default=None, gt=0)
+    depthCm: Optional[float] = Field(default=None, gt=0)
 
 
 class CreateGenerationJobResponse(BaseModel):

@@ -25,6 +25,13 @@ Apply the schema once:
 psql "$DATABASE_URL" -f sql/schema.sql
 ```
 
+If the RDS database already has older tables, run the upgrade script once before
+starting the worker:
+
+```bash
+psql "$DATABASE_URL" -f sql/upgrade_existing.sql
+```
+
 ## Run API on EC2
 
 ```bash

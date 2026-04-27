@@ -18,8 +18,22 @@ class AuthRequest(BaseModel):
     password: str = Field(min_length=8)
 
 
+class AuthUser(BaseModel):
+    id: str
+    email: EmailStr
+
+
 class AuthResponse(BaseModel):
     accessToken: str
+    tokenType: str = "bearer"
+    user: AuthUser
+
+
+def _auth_response(user_id: object, email: str) -> AuthResponse:
+    return AuthResponse(
+        accessToken=create_access_token(user_id, email),
+        user=AuthUser(id=str(user_id), email=email),
+    )
 
 
 @router.post("/signup", response_model=AuthResponse)
@@ -49,7 +63,7 @@ def signup(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
             detail="Email is already registered",
         ) from exc
 
-    return AuthResponse(accessToken=create_access_token(user_row["id"], user_row["email"]))
+    return _auth_response(user_row["id"], user_row["email"])
 
 
 @router.post("/login", response_model=AuthResponse)
@@ -73,4 +87,4 @@ def login(payload: AuthRequest, db: Session = Depends(get_db)) -> AuthResponse:
     if not verify_password(payload.password, row["password_hash"]):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
 
-    return AuthResponse(accessToken=create_access_token(row["id"], row["email"]))
+    return _auth_response(row["id"], row["email"])
