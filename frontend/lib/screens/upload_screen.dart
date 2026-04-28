@@ -1,10 +1,15 @@
 import 'dart:convert';
-import 'dart:typed_data';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
+
+import '../api_client.dart';
+import '../models/pending_generation_job.dart';
+import '../providers/pending_jobs_provider.dart';
 import '../theme/app_theme.dart';
 import 'processing_screen.dart';
 
@@ -16,11 +21,29 @@ class UploadScreen extends StatefulWidget {
 }
 
 class _UploadScreenState extends State<UploadScreen> {
+  final _nameController = TextEditingController(text: 'Wooden Chair');
+  final _categoryController = TextEditingController(text: 'chair');
+  final _widthController = TextEditingController();
+  final _heightController = TextEditingController();
+  final _depthController = TextEditingController();
+
   XFile? _xfile;
   Uint8List? _bytes;
   bool _analyzed = false;
+  bool _submitting = false;
+  String? _error;
 
   bool get _hasImage => _xfile != null && _bytes != null;
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _categoryController.dispose();
+    _widthController.dispose();
+    _heightController.dispose();
+    _depthController.dispose();
+    super.dispose();
+  }
 
   Future<void> _pick() async {
     final picked = await ImagePicker().pickImage(
@@ -36,13 +59,13 @@ class _UploadScreenState extends State<UploadScreen> {
       _xfile = picked;
       _bytes = bytes;
       _analyzed = false;
+      _error = null;
     });
 
     await Future.delayed(const Duration(milliseconds: 900));
     if (mounted) setState(() => _analyzed = true);
   }
 
-  // 웹: bytes를 base64 data URL로, 모바일: 파일 경로
   String get _storagePath {
     if (kIsWeb) {
       return 'data:image/jpeg;base64,${base64Encode(_bytes!)}';
@@ -50,19 +73,114 @@ class _UploadScreenState extends State<UploadScreen> {
     return _xfile!.path;
   }
 
-  void _convert() {
-    if (!_hasImage || !_analyzed) return;
-    Navigator.push(
-      context,
-      PageRouteBuilder(
-        pageBuilder: (_, a, __) => ProcessingScreen(imagePath: _storagePath),
-        transitionsBuilder: (_, a, __, child) => FadeTransition(
-          opacity: CurvedAnimation(parent: a, curve: Curves.easeIn),
-          child: child,
+  Future<void> _convert() async {
+    if (!_hasImage || !_analyzed || _submitting) return;
+
+    final name = _nameController.text.trim();
+    final category = _categoryController.text.trim();
+    if (name.isEmpty || category.isEmpty) {
+      setState(() => _error = '이름과 카테고리를 입력해주세요.');
+      return;
+    }
+
+    setState(() {
+      _submitting = true;
+      _error = null;
+    });
+
+    try {
+      final api = context.read<ApiClient>();
+      final pendingJobs = context.read<PendingJobsProvider>();
+      final extension = _extensionFor(_xfile!.name);
+      final contentType = _contentTypeFor(extension);
+      final ticket = await api.requestSourceImageUploadUrl(
+        extension: extension,
+        contentType: contentType,
+      );
+      await api.uploadBytesToPresignedUrl(
+        uploadUrl: ticket.uploadUrl,
+        bytes: _bytes!,
+        contentType: contentType,
+      );
+      await api.completeSourceImage(ticket);
+      final job = await api.createGenerationJob(
+        sourceImageId: ticket.sourceImageId,
+        name: name,
+        category: category,
+        widthCm: _parseDouble(_widthController.text),
+        heightCm: _parseDouble(_heightController.text),
+        depthCm: _parseDouble(_depthController.text),
+      );
+      await pendingJobs.add(
+        PendingGenerationJob(
+          jobId: job.jobId,
+          name: name,
+          category: category,
+          imagePath: _storagePath,
+          dimensions: _dimensionText,
+          status: job.status,
+          createdAt: DateTime.now(),
         ),
-        transitionDuration: const Duration(milliseconds: 300),
-      ),
-    );
+      );
+
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        PageRouteBuilder(
+          pageBuilder: (context, a, secondaryAnimation) => ProcessingScreen(
+            jobId: job.jobId,
+            imagePath: _storagePath,
+            requestedName: name,
+            requestedCategory: category,
+            requestedDimensions: _dimensionText,
+          ),
+          transitionsBuilder: (context, a, secondaryAnimation, child) =>
+              FadeTransition(
+                opacity: CurvedAnimation(parent: a, curve: Curves.easeIn),
+                child: child,
+              ),
+          transitionDuration: const Duration(milliseconds: 300),
+        ),
+      );
+    } catch (error) {
+      if (mounted) setState(() => _error = error.toString());
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  String get _dimensionText {
+    final width = _widthController.text.trim();
+    final depth = _depthController.text.trim();
+    final height = _heightController.text.trim();
+    if (width.isEmpty || depth.isEmpty || height.isEmpty) return '크기 미입력';
+    return '$width × $depth × $height cm';
+  }
+
+  String _extensionFor(String filename) {
+    final name = filename.toLowerCase();
+    final index = name.lastIndexOf('.');
+    final ext = index >= 0 ? name.substring(index + 1) : 'jpg';
+    if (ext == 'jpeg') return 'jpg';
+    if (ext == 'png' || ext == 'webp' || ext == 'jpg') return ext;
+    return 'jpg';
+  }
+
+  String _contentTypeFor(String extension) {
+    switch (extension) {
+      case 'png':
+        return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      default:
+        return 'image/jpeg';
+    }
+  }
+
+  double? _parseDouble(String value) {
+    final trimmed = value.trim();
+    if (trimmed.isEmpty) return null;
+    return double.tryParse(trimmed);
   }
 
   @override
@@ -72,7 +190,7 @@ class _UploadScreenState extends State<UploadScreen> {
         title: const Text('새 모델 만들기'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-          onPressed: () => Navigator.pop(context),
+          onPressed: _submitting ? null : () => Navigator.pop(context),
         ),
       ),
       body: SafeArea(
@@ -90,15 +208,17 @@ class _UploadScreenState extends State<UploadScreen> {
               ),
               const Gap(20),
               GestureDetector(
-                onTap: _pick,
+                onTap: _submitting ? null : _pick,
                 child: _hasImage
                     ? _Preview(
                         bytes: _bytes!,
-                        onRemove: () => setState(() {
-                          _xfile = null;
-                          _bytes = null;
-                          _analyzed = false;
-                        }),
+                        onRemove: _submitting
+                            ? null
+                            : () => setState(() {
+                                _xfile = null;
+                                _bytes = null;
+                                _analyzed = false;
+                              }),
                       )
                     : const _UploadArea(),
               ),
@@ -109,10 +229,23 @@ class _UploadScreenState extends State<UploadScreen> {
                   duration: const Duration(milliseconds: 500),
                   child: const _AnalysisCard(),
                 ),
+                const Gap(18),
+                _RequestForm(
+                  nameController: _nameController,
+                  categoryController: _categoryController,
+                  widthController: _widthController,
+                  heightController: _heightController,
+                  depthController: _depthController,
+                ),
+              ],
+              if (_error != null) ...[
+                const Gap(16),
+                _ErrorBox(message: _error!),
               ],
               const Gap(28),
               _ConvertButton(
-                enabled: _hasImage && _analyzed,
+                enabled: _hasImage && _analyzed && !_submitting,
+                loading: _submitting,
                 onTap: _convert,
               ),
             ],
@@ -179,7 +312,7 @@ class _UploadArea extends StatelessWidget {
 
 class _Preview extends StatelessWidget {
   final Uint8List bytes;
-  final VoidCallback onRemove;
+  final VoidCallback? onRemove;
 
   const _Preview({required this.bytes, required this.onRemove});
 
@@ -205,8 +338,11 @@ class _Preview extends StatelessWidget {
                   color: Colors.black.withValues(alpha: 0.55),
                   shape: BoxShape.circle,
                 ),
-                child: const Icon(Icons.close_rounded,
-                    color: Colors.white, size: 18),
+                child: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
               ),
             ),
           ),
@@ -227,18 +363,23 @@ class _AnalysisCard extends StatelessWidget {
         color: AppColors.successBg,
         borderRadius: BorderRadius.circular(16),
         border: Border.all(
-            color: AppColors.success.withValues(alpha: 0.25), width: 1),
+          color: AppColors.success.withValues(alpha: 0.25),
+          width: 1,
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Icon(Icons.check_circle_rounded,
-                  color: AppColors.success, size: 17),
+              const Icon(
+                Icons.check_circle_rounded,
+                color: AppColors.success,
+                size: 17,
+              ),
               const Gap(8),
               Text(
-                '분석 완료  ·  변환 준비됨',
+                '분석 완료  ·  업로드 준비됨',
                 style: GoogleFonts.nunito(
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
@@ -248,11 +389,7 @@ class _AnalysisCard extends StatelessWidget {
             ],
           ),
           const Gap(12),
-          for (final label in [
-            '이미지 품질 양호',
-            '가구 오브젝트 감지됨',
-            '3D 변환 가능',
-          ])
+          for (final label in ['이미지 품질 양호', '가구 오브젝트 감지됨', 'VARCO 3D 생성 가능'])
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Row(
@@ -282,11 +419,157 @@ class _AnalysisCard extends StatelessWidget {
   }
 }
 
+class _RequestForm extends StatelessWidget {
+  final TextEditingController nameController;
+  final TextEditingController categoryController;
+  final TextEditingController widthController;
+  final TextEditingController heightController;
+  final TextEditingController depthController;
+
+  const _RequestForm({
+    required this.nameController,
+    required this.categoryController,
+    required this.widthController,
+    required this.heightController,
+    required this.depthController,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '생성 정보',
+            style: GoogleFonts.nunito(
+              fontSize: 16,
+              fontWeight: FontWeight.w800,
+              color: AppColors.textPrimary,
+            ),
+          ),
+          const Gap(14),
+          _TextInput(controller: nameController, label: '이름'),
+          const Gap(10),
+          _TextInput(controller: categoryController, label: '카테고리'),
+          const Gap(10),
+          Row(
+            children: [
+              Expanded(
+                child: _TextInput(
+                  controller: widthController,
+                  label: '가로 cm',
+                  number: true,
+                ),
+              ),
+              const Gap(8),
+              Expanded(
+                child: _TextInput(
+                  controller: depthController,
+                  label: '깊이 cm',
+                  number: true,
+                ),
+              ),
+              const Gap(8),
+              Expanded(
+                child: _TextInput(
+                  controller: heightController,
+                  label: '높이 cm',
+                  number: true,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TextInput extends StatelessWidget {
+  final TextEditingController controller;
+  final String label;
+  final bool number;
+
+  const _TextInput({
+    required this.controller,
+    required this.label,
+    this.number = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return TextField(
+      controller: controller,
+      keyboardType: number
+          ? const TextInputType.numberWithOptions(decimal: true)
+          : null,
+      style: GoogleFonts.nunito(fontSize: 14, color: AppColors.textPrimary),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: GoogleFonts.nunito(color: AppColors.textTertiary),
+        filled: true,
+        fillColor: AppColors.surface,
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 13,
+        ),
+        enabledBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.border),
+        ),
+        focusedBorder: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: const BorderSide(color: AppColors.primary),
+        ),
+      ),
+    );
+  }
+}
+
+class _ErrorBox extends StatelessWidget {
+  final String message;
+
+  const _ErrorBox({required this.message});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: const Color(0xFF3A1D1D),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF693131)),
+      ),
+      child: Text(
+        message,
+        style: GoogleFonts.nunito(
+          fontSize: 13,
+          color: const Color(0xFFFFB8A8),
+          height: 1.4,
+        ),
+      ),
+    );
+  }
+}
+
 class _ConvertButton extends StatelessWidget {
   final bool enabled;
+  final bool loading;
   final VoidCallback onTap;
 
-  const _ConvertButton({required this.enabled, required this.onTap});
+  const _ConvertButton({
+    required this.enabled,
+    required this.loading,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -306,25 +589,34 @@ class _ConvertButton extends StatelessWidget {
           borderRadius: BorderRadius.circular(18),
         ),
         child: Center(
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                Icons.auto_awesome_rounded,
-                color: enabled ? Colors.white : AppColors.textTertiary,
-                size: 20,
-              ),
-              const Gap(8),
-              Text(
-                '3D로 변환하기',
-                style: GoogleFonts.nunito(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: enabled ? Colors.white : AppColors.textTertiary,
+          child: loading
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.auto_awesome_rounded,
+                      color: enabled ? Colors.white : AppColors.textTertiary,
+                      size: 20,
+                    ),
+                    const Gap(8),
+                    Text(
+                      '3D로 변환하기',
+                      style: GoogleFonts.nunito(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: enabled ? Colors.white : AppColors.textTertiary,
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
-          ),
         ),
       ),
     );

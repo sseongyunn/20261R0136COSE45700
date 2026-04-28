@@ -2,17 +2,44 @@ import 'package:flutter/material.dart';
 import 'package:gap/gap.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import '../providers/collection_provider.dart';
+
+import '../api_client.dart';
+import '../providers/pending_jobs_provider.dart';
 import '../theme/app_theme.dart';
 import 'gallery_screen.dart';
 import 'upload_screen.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
 
   @override
+  State<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends State<HomeScreen> {
+  int _assetCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAssetCount();
+  }
+
+  Future<void> _loadAssetCount() async {
+    try {
+      final assets = await context.read<ApiClient>().listFurnitureAssets();
+      if (!mounted) return;
+      setState(() => _assetCount = assets.length);
+    } catch (_) {
+      // Home remains usable even if the count request fails.
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final count = context.watch<CollectionProvider>().count;
+    final api = context.watch<ApiClient>();
+    final runningCount = context.watch<PendingJobsProvider>().runningCount;
+    final totalCount = _assetCount + runningCount;
 
     return Scaffold(
       body: SafeArea(
@@ -22,7 +49,14 @@ class HomeScreen extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const Gap(28),
-              _Logo(),
+              _Logo(
+                email: api.email,
+                onLogout: () async {
+                  await context.read<PendingJobsProvider>().clear();
+                  if (!context.mounted) return;
+                  await context.read<ApiClient>().logout();
+                },
+              ),
               const Spacer(flex: 2),
               _Headline(),
               const Gap(14),
@@ -40,11 +74,11 @@ class HomeScreen extends StatelessWidget {
                 iconColor: AppColors.primary,
                 iconBg: const Color(0xFF3D2518),
                 title: '사진으로 3D 만들기',
-                subtitle: '갤러리에서 가구 사진 선택',
+                subtitle: '사진 업로드 후 VARCO 생성 요청',
                 onTap: () => Navigator.push(
                   context,
                   _slide(const UploadScreen()),
-                ),
+                ).then((_) => _loadAssetCount()),
               ),
               const Gap(12),
               _ActionCard(
@@ -52,12 +86,14 @@ class HomeScreen extends StatelessWidget {
                 iconColor: AppColors.accent,
                 iconBg: const Color(0xFF352E10),
                 title: '내 컬렉션',
-                subtitle: '저장된 3D 모델 모아보기',
-                badge: count > 0 ? '$count' : null,
+                subtitle: runningCount > 0
+                    ? '$runningCount개 모델 생성 중'
+                    : '생성된 GLB 모델 모아보기',
+                badge: totalCount > 0 ? '$totalCount' : null,
                 onTap: () => Navigator.push(
                   context,
                   _slide(const GalleryScreen()),
-                ),
+                ).then((_) => _loadAssetCount()),
               ),
               const Spacer(flex: 2),
               Center(
@@ -79,19 +115,25 @@ class HomeScreen extends StatelessWidget {
   }
 
   PageRouteBuilder _slide(Widget page) => PageRouteBuilder(
-        pageBuilder: (_, a, __) => page,
-        transitionsBuilder: (_, a, __, child) => SlideTransition(
+    pageBuilder: (context, a, secondaryAnimation) => page,
+    transitionsBuilder: (context, a, secondaryAnimation, child) =>
+        SlideTransition(
           position: Tween(
             begin: const Offset(1, 0),
             end: Offset.zero,
           ).animate(CurvedAnimation(parent: a, curve: Curves.easeOutCubic)),
           child: child,
         ),
-        transitionDuration: const Duration(milliseconds: 320),
-      );
+    transitionDuration: const Duration(milliseconds: 320),
+  );
 }
 
 class _Logo extends StatelessWidget {
+  final String? email;
+  final VoidCallback onLogout;
+
+  const _Logo({required this.email, required this.onLogout});
+
   @override
   Widget build(BuildContext context) {
     return Row(
@@ -110,12 +152,38 @@ class _Logo extends StatelessWidget {
           ),
         ),
         const Gap(10),
-        Text(
-          'Furni3D',
-          style: GoogleFonts.nunito(
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            color: AppColors.textPrimary,
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Furni3D',
+                style: GoogleFonts.nunito(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+              if (email != null)
+                Text(
+                  email!,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: GoogleFonts.nunito(
+                    fontSize: 11,
+                    color: AppColors.textTertiary,
+                  ),
+                ),
+            ],
+          ),
+        ),
+        IconButton(
+          tooltip: '로그아웃',
+          onPressed: onLogout,
+          icon: const Icon(
+            Icons.logout_rounded,
+            color: AppColors.textSecondary,
+            size: 20,
           ),
         ),
       ],
@@ -223,7 +291,10 @@ class _ActionCard extends StatelessWidget {
             ),
             if (badge != null)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
                 decoration: BoxDecoration(
                   color: AppColors.primary.withValues(alpha: 0.2),
                   borderRadius: BorderRadius.circular(12),

@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:gap/gap.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:provider/provider.dart';
 import '../models/furniture_model.dart';
-import '../providers/collection_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/furni_image.dart';
+import 'gallery_screen.dart';
+import 'model_url_screen.dart';
 
 class ResultScreen extends StatefulWidget {
   final FurnitureModel model;
@@ -17,17 +18,46 @@ class ResultScreen extends StatefulWidget {
 }
 
 class _ResultScreenState extends State<ResultScreen> {
-  bool _saved = false;
+  void _openGallery() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const GalleryScreen()),
+    );
+  }
 
-  Future<void> _save() async {
-    if (_saved) return;
-    await context.read<CollectionProvider>().add(widget.model);
+  Future<void> _copyModelUrl() async {
+    final url = widget.model.modelUrl;
+    if (url == null || url.isEmpty) {
+      _showSnack('아직 복사할 모델 URL이 없어요');
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: url));
     if (!mounted) return;
-    setState(() => _saved = true);
+    _showSnack('모델 URL을 복사했어요');
+  }
+
+  void _openModelUrl() {
+    final assetId = widget.model.assetId;
+    if (assetId == null || assetId.isEmpty) {
+      _showSnack('assetId가 없어 URL을 요청할 수 없어요');
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ModelUrlScreen(
+          assetId: assetId,
+          initialModelUrl: widget.model.modelUrl,
+        ),
+      ),
+    );
+  }
+
+  void _showSnack(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
-          '컬렉션에 저장되었어요',
+          message,
           style: GoogleFonts.nunito(color: AppColors.textPrimary),
         ),
       ),
@@ -43,12 +73,13 @@ class _ResultScreenState extends State<ResultScreen> {
         title: const Text('3D 모델 완성!'),
         actions: [
           TextButton(
-            onPressed: () =>
-                Navigator.of(context).popUntil((r) => r.isFirst),
+            onPressed: () => Navigator.of(context).popUntil((r) => r.isFirst),
             child: Text(
               '홈으로',
               style: GoogleFonts.nunito(
-                  fontSize: 14, color: AppColors.textSecondary),
+                fontSize: 14,
+                color: AppColors.textSecondary,
+              ),
             ),
           ),
         ],
@@ -64,12 +95,12 @@ class _ResultScreenState extends State<ResultScreen> {
               _DetailsCard(model: m),
               const Gap(16),
               _ActionRow(
-                onShare: () {},
-                onDownload: () {},
+                onShare: () => _copyModelUrl(),
+                onDownload: _openModelUrl,
                 onRegenerate: () => Navigator.pop(context),
               ),
               const Gap(24),
-              _SaveButton(saved: _saved, onTap: _save),
+              _SaveButton(onTap: _openGallery),
               const Gap(8),
             ],
           ),
@@ -99,8 +130,7 @@ class _ModelImage extends StatelessWidget {
             top: 12,
             left: 12,
             child: Container(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
                 color: Colors.black.withValues(alpha: 0.55),
                 borderRadius: BorderRadius.circular(10),
@@ -174,12 +204,12 @@ class _DetailsCard extends StatelessWidget {
           Row(
             children: [
               Expanded(
-                  child:
-                      _Detail(label: '크기', value: model.dimensions)),
+                child: _Detail(label: '크기', value: model.dimensions),
+              ),
               const Gap(16),
               Expanded(
-                  child:
-                      _Detail(label: '재질', value: model.material)),
+                child: _Detail(label: '재질', value: model.material),
+              ),
             ],
           ),
           const Gap(16),
@@ -187,15 +217,13 @@ class _DetailsCard extends StatelessWidget {
             children: [
               Expanded(
                 child: _Detail(
-                    label: '처리 시간',
-                    value: '${model.processingSeconds}초'),
+                  label: '처리 시간',
+                  value: '${model.processingSeconds}초',
+                ),
               ),
               const Gap(16),
               Expanded(
-                child: _Detail(
-                  label: '생성일',
-                  value: _fmt(model.createdAt),
-                ),
+                child: _Detail(label: '생성일', value: _fmt(model.createdAt)),
               ),
             ],
           ),
@@ -281,18 +309,19 @@ class _ActionRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _ActionBtn(
-            icon: Icons.share_rounded, label: '공유', onTap: onShare),
+        _ActionBtn(icon: Icons.share_rounded, label: '공유', onTap: onShare),
         const Gap(10),
         _ActionBtn(
-            icon: Icons.download_rounded,
-            label: '다운로드',
-            onTap: onDownload),
+          icon: Icons.download_rounded,
+          label: '다운로드',
+          onTap: onDownload,
+        ),
         const Gap(10),
         _ActionBtn(
-            icon: Icons.refresh_rounded,
-            label: '재생성',
-            onTap: onRegenerate),
+          icon: Icons.refresh_rounded,
+          label: '재생성',
+          onTap: onRegenerate,
+        ),
       ],
     );
   }
@@ -303,8 +332,11 @@ class _ActionBtn extends StatelessWidget {
   final String label;
   final VoidCallback onTap;
 
-  const _ActionBtn(
-      {required this.icon, required this.label, required this.onTap});
+  const _ActionBtn({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -338,23 +370,20 @@ class _ActionBtn extends StatelessWidget {
 }
 
 class _SaveButton extends StatelessWidget {
-  final bool saved;
   final VoidCallback onTap;
 
-  const _SaveButton({required this.saved, required this.onTap});
+  const _SaveButton({required this.onTap});
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
-      onTap: saved ? null : onTap,
+      onTap: onTap,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 350),
         height: 58,
         decoration: BoxDecoration(
-          gradient: LinearGradient(
-            colors: saved
-                ? [AppColors.card, AppColors.card]
-                : [AppColors.primary, AppColors.accent],
+          gradient: const LinearGradient(
+            colors: [AppColors.primary, AppColors.accent],
             begin: Alignment.centerLeft,
             end: Alignment.centerRight,
           ),
@@ -364,20 +393,18 @@ class _SaveButton extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(
-                saved
-                    ? Icons.check_circle_rounded
-                    : Icons.bookmark_add_outlined,
-                color: saved ? AppColors.success : Colors.white,
+              const Icon(
+                Icons.grid_view_rounded,
+                color: Colors.white,
                 size: 20,
               ),
               const Gap(8),
               Text(
-                saved ? '컬렉션에 저장됨' : '내 컬렉션에 저장하기',
+                '내 컬렉션 보기',
                 style: GoogleFonts.nunito(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
-                  color: saved ? AppColors.success : Colors.white,
+                  color: Colors.white,
                 ),
               ),
             ],

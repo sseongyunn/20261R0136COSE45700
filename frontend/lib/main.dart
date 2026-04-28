@@ -1,24 +1,32 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
-import 'providers/collection_provider.dart';
+import 'api_client.dart';
 import 'app.dart';
+import 'providers/pending_jobs_provider.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
-    statusBarColor: Colors.transparent,
-    statusBarIconBrightness: Brightness.light,
-    statusBarBrightness: Brightness.dark,
-  ));
+  SystemChrome.setSystemUIOverlayStyle(
+    const SystemUiOverlayStyle(
+      statusBarColor: Colors.transparent,
+      statusBarIconBrightness: Brightness.light,
+      statusBarBrightness: Brightness.dark,
+    ),
+  );
 
-  final provider = CollectionProvider();
-  await provider.load();
+  final api = ApiClient();
+  await api.loadToken();
+  final pendingJobs = PendingJobsProvider();
+  await pendingJobs.load();
 
   runApp(
-    ChangeNotifierProvider.value(
-      value: provider,
+    MultiProvider(
+      providers: [
+        ChangeNotifierProvider.value(value: api),
+        ChangeNotifierProvider.value(value: pendingJobs),
+      ],
       child: const FurniApp(),
     ),
   );

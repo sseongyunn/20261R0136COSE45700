@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import 'api_client.dart';
 import 'theme/app_theme.dart';
+import 'screens/auth_screen.dart';
 import 'screens/home_screen.dart';
 
 class FurniApp extends StatelessWidget {
@@ -11,7 +14,9 @@ class FurniApp extends StatelessWidget {
       title: 'Furni3D',
       theme: AppTheme.theme,
       debugShowCheckedModeBanner: false,
-      home: const HomeScreen(),
+      home: context.watch<ApiClient>().isAuthenticated
+          ? const HomeScreen()
+          : const AuthScreen(),
     );
   }
 }
