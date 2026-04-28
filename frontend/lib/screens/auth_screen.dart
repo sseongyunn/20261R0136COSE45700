@@ -136,7 +136,7 @@ class _Logo extends StatelessWidget {
         ),
         const Gap(10),
         Text(
-          'Furni3D',
+          'furniFit',
           style: GoogleFonts.nunito(
             fontSize: 22,
             fontWeight: FontWeight.w800,

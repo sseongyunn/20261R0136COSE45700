@@ -11,7 +11,7 @@ class CollectionProvider extends ChangeNotifier {
 
   Future<void> load() async {
     final prefs = await SharedPreferences.getInstance();
-    final raw = prefs.getStringList('furni3d_models') ?? [];
+    final raw = prefs.getStringList('furnifit_models') ?? [];
     _models = raw
         .map((e) => FurnitureModel.fromJson(jsonDecode(e) as Map<String, dynamic>))
         .toList();
@@ -27,7 +27,7 @@ class CollectionProvider extends ChangeNotifier {
   Future<void> _persist() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setStringList(
-      'furni3d_models',
+      'furnifit_models',
       _models.map((m) => jsonEncode(m.toJson())).toList(),
     );
   }

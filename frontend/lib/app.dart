@@ -11,7 +11,7 @@ class FurniApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Furni3D',
+      title: 'furniFit',
       theme: AppTheme.theme,
       debugShowCheckedModeBanner: false,
       home: context.watch<ApiClient>().isAuthenticated

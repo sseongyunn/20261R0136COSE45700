@@ -7,7 +7,7 @@ import '../api_client.dart';
 import '../models/pending_generation_job.dart';
 
 class PendingJobsProvider extends ChangeNotifier {
-  static const _storageKey = 'furni3d_pending_jobs';
+  static const _storageKey = 'furnifit_pending_jobs';
 
   List<PendingGenerationJob> _jobs = [];
 
