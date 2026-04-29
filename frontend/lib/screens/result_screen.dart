@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gap/gap.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/furniture_model.dart';
 import '../theme/app_theme.dart';
 import '../widgets/furni_image.dart';
+import '../widgets/glb_model_viewer.dart';
 import 'gallery_screen.dart';
 import 'model_url_screen.dart';
 
@@ -90,7 +92,7 @@ class _ResultScreenState extends State<ResultScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _ModelImage(path: m.imagePath),
+              _ModelViewer(model: m),
               const Gap(20),
               _DetailsCard(model: m),
               const Gap(16),
@@ -110,49 +112,119 @@ class _ResultScreenState extends State<ResultScreen> {
   }
 }
 
-class _ModelImage extends StatelessWidget {
-  final String path;
+class _ModelViewer extends StatelessWidget {
+  final FurnitureModel model;
 
-  const _ModelImage({required this.path});
+  const _ModelViewer({required this.model});
+
+  Future<void> _launchAR(BuildContext context, String url) async {
+    final uri = Uri.parse(url);
+    try {
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'AR을 열 수 없어요. 기기가 AR을 지원하는지 확인해 주세요.',
+              style: GoogleFonts.nunito(),
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'AR 실행 중 오류가 발생했어요.',
+              style: GoogleFonts.nunito(),
+            ),
+          ),
+        );
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    return ClipRRect(
-      borderRadius: BorderRadius.circular(22),
-      child: Stack(
-        children: [
-          SizedBox(
-            width: double.infinity,
-            height: 290,
-            child: FurniImage(imagePath: path),
-          ),
-          Positioned(
-            top: 12,
-            left: 12,
+    final hasModel = model.modelUrl != null && model.modelUrl!.isNotEmpty;
+    final modelUrl = model.modelUrl ?? '';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        // ── 3D 뷰어 (S3 → 로컬 파일 다운로드 후 렌더링) ──
+        Stack(
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(22),
+              child: hasModel
+                  ? GlbModelViewer(modelUrl: modelUrl, height: 320)
+                  : SizedBox(
+                      height: 320,
+                      child: FurniImage(imagePath: model.imagePath),
+                    ),
+            ),
+            // 좌상단 배지
+            Positioned(
+              top: 12,
+              left: 12,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      width: 7,
+                      height: 7,
+                      decoration: BoxDecoration(
+                        color: hasModel ? AppColors.primary : AppColors.textTertiary,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const Gap(6),
+                    Text(
+                      hasModel ? '3D 뷰어 · 드래그로 회전' : '2D 미리보기',
+                      style: GoogleFonts.nunito(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        // ── AR 보기 버튼 ──
+        if (hasModel) ...[
+          const Gap(12),
+          GestureDetector(
+            onTap: () => _launchAR(context, modelUrl),
             child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              height: 50,
               decoration: BoxDecoration(
-                color: Colors.black.withValues(alpha: 0.55),
-                borderRadius: BorderRadius.circular(10),
+                color: AppColors.card,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
               ),
               child: Row(
-                mainAxisSize: MainAxisSize.min,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Container(
-                    width: 7,
-                    height: 7,
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
-                      shape: BoxShape.circle,
-                    ),
-                  ),
-                  const Gap(6),
+                  const Icon(Icons.view_in_ar_rounded,
+                      color: AppColors.primary, size: 20),
+                  const Gap(8),
                   Text(
-                    '3D 모델',
+                    'AR로 실제 공간에서 보기',
                     style: GoogleFonts.nunito(
-                      fontSize: 12,
+                      fontSize: 14,
                       fontWeight: FontWeight.w700,
-                      color: Colors.white,
+                      color: AppColors.primary,
                     ),
                   ),
                 ],
@@ -160,7 +232,7 @@ class _ModelImage extends StatelessWidget {
             ),
           ),
         ],
-      ),
+      ],
     );
   }
 }

@@ -159,65 +159,72 @@ class _ProcessingScreenState extends State<ProcessingScreen>
         title: const Text('AI 처리 중'),
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(28),
-          child: Column(
-            children: [
-              const Spacer(),
-              _PulseOrb(controller: _pulse),
-              const Gap(32),
-              Text(
-                '변환하고 있어요',
-                style: GoogleFonts.nunito(
-                  fontSize: 24,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              const Gap(8),
-              Text(
-                '현재 상태: $_status',
-                style: GoogleFonts.nunito(
-                  fontSize: 15,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              if (_error != null) ...[
-                const Gap(14),
-                _ErrorBox(message: _error!),
-              ],
-              const Spacer(),
-              _StepList(currentStep: _step, steps: _steps),
-              const Spacer(),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  TextButton(
-                    onPressed: _polling ? null : _refresh,
-                    child: Text(
-                      _polling ? '확인 중' : '새로고침',
+        child: CustomScrollView(
+          slivers: [
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: Padding(
+                padding: const EdgeInsets.all(28),
+                child: Column(
+                  children: [
+                    const Spacer(),
+                    _PulseOrb(controller: _pulse),
+                    const Gap(32),
+                    Text(
+                      '변환하고 있어요',
+                      style: GoogleFonts.nunito(
+                        fontSize: 24,
+                        fontWeight: FontWeight.w800,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const Gap(8),
+                    Text(
+                      '현재 상태: $_status',
                       style: GoogleFonts.nunito(
                         fontSize: 15,
                         color: AppColors.textSecondary,
                       ),
                     ),
-                  ),
-                  const Gap(12),
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: Text(
-                      '닫기',
-                      style: GoogleFonts.nunito(
-                        fontSize: 15,
-                        color: AppColors.textTertiary,
-                      ),
+                    if (_error != null) ...[
+                      const Gap(14),
+                      _ErrorBox(message: _error!),
+                    ],
+                    const Spacer(),
+                    _StepList(currentStep: _step, steps: _steps),
+                    const Spacer(),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        TextButton(
+                          onPressed: _polling ? null : _refresh,
+                          child: Text(
+                            _polling ? '확인 중' : '새로고침',
+                            style: GoogleFonts.nunito(
+                              fontSize: 15,
+                              color: AppColors.textSecondary,
+                            ),
+                          ),
+                        ),
+                        const Gap(12),
+                        TextButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: Text(
+                            '닫기',
+                            style: GoogleFonts.nunito(
+                              fontSize: 15,
+                              color: AppColors.textTertiary,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
-                ],
+                    const Gap(4),
+                  ],
+                ),
               ),
-              const Gap(4),
-            ],
-          ),
+            ),
+          ],
         ),
       ),
     );

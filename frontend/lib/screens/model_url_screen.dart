@@ -3,9 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:gap/gap.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../api_client.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glb_model_viewer.dart';
 
 class ModelUrlScreen extends StatefulWidget {
   final String assetId;
@@ -66,11 +68,41 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
     );
   }
 
+  Future<void> _launchAR() async {
+    final url = _modelUrl;
+    if (url == null) return;
+    final uri = Uri.parse(url);
+    try {
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'AR을 열 수 없어요. 기기가 AR을 지원하는지 확인해 주세요.',
+              style: GoogleFonts.nunito(),
+            ),
+          ),
+        );
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'AR 실행 중 오류가 발생했어요.',
+              style: GoogleFonts.nunito(),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('모델 URL'),
+        title: const Text('3D 모델 보기'),
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
           onPressed: () => Navigator.pop(context),
@@ -84,52 +116,210 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
         ],
       ),
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-          children: [
-            Container(
-              padding: const EdgeInsets.all(22),
-              decoration: BoxDecoration(
-                color: AppColors.card,
-                borderRadius: BorderRadius.circular(22),
-                border: Border.all(color: AppColors.border),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
+        child: _loading
+            ? Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const CircularProgressIndicator(color: AppColors.primary),
+                    const Gap(16),
+                    Text(
+                      '모델을 불러오는 중...',
+                      style: GoogleFonts.nunito(
+                        color: AppColors.textSecondary,
+                        fontSize: 14,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            : _error != null
+                ? _ErrorState(message: _error!, onRetry: _load)
+                : ListView(
+                    padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(14),
-                        ),
-                        child: const Icon(
-                          Icons.file_download_outlined,
-                          color: AppColors.primary,
-                          size: 24,
+                      // ── 3D 뷰어 (S3 → 로컬 파일 다운로드 후 렌더링) ──
+                      Stack(
+                        children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(22),
+                            child: GlbModelViewer(
+                              modelUrl: _modelUrl!,
+                              height: 360,
+                            ),
+                          ),
+                          // 좌상단 배지
+                          Positioned(
+                            top: 12,
+                            left: 12,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 10, vertical: 6),
+                              decoration: BoxDecoration(
+                                color: Colors.black.withValues(alpha: 0.55),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 7,
+                                    height: 7,
+                                    decoration: const BoxDecoration(
+                                      color: AppColors.primary,
+                                      shape: BoxShape.circle,
+                                    ),
+                                  ),
+                                  const Gap(6),
+                                  Text(
+                                    '3D 뷰어 · 드래그로 회전',
+                                    style: GoogleFonts.nunito(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Gap(12),
+                      // ── AR 보기 버튼 ──
+                      GestureDetector(
+                        onTap: _launchAR,
+                        child: Container(
+                          height: 50,
+                          decoration: BoxDecoration(
+                            color: AppColors.card,
+                            borderRadius: BorderRadius.circular(16),
+                            border: Border.all(
+                                color: AppColors.primary.withValues(alpha: 0.5)),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const Icon(Icons.view_in_ar_rounded,
+                                  color: AppColors.primary, size: 20),
+                              const Gap(8),
+                              Text(
+                                'AR로 실제 공간에서 보기',
+                                style: GoogleFonts.nunito(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primary,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       ),
-                      const Gap(14),
-                      Expanded(
+                      const Gap(20),
+                      // ── URL 복사 카드 ──
+                      Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: AppColors.card,
+                          borderRadius: BorderRadius.circular(20),
+                          border: Border.all(color: AppColors.border),
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Text(
-                              'GLB 다운로드 링크',
-                              style: GoogleFonts.nunito(
-                                fontSize: 17,
-                                fontWeight: FontWeight.w800,
-                                color: AppColors.textPrimary,
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(10),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.12),
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
+                                  child: const Icon(
+                                    Icons.file_download_outlined,
+                                    color: AppColors.primary,
+                                    size: 20,
+                                  ),
+                                ),
+                                const Gap(12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'GLB 다운로드 링크',
+                                        style: GoogleFonts.nunito(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w800,
+                                          color: AppColors.textPrimary,
+                                        ),
+                                      ),
+                                      Text(
+                                        'S3 presigned URL',
+                                        style: GoogleFonts.nunito(
+                                          fontSize: 12,
+                                          color: AppColors.textSecondary,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const Gap(16),
+                            Container(
+                              width: double.infinity,
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppColors.surface,
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: AppColors.border),
+                              ),
+                              child: SelectableText(
+                                _modelUrl ?? '',
+                                style: GoogleFonts.nunito(
+                                  fontSize: 11,
+                                  color: AppColors.textSecondary,
+                                  height: 1.45,
+                                ),
                               ),
                             ),
-                            const Gap(2),
-                            Text(
-                              'S3 presigned URL',
-                              style: GoogleFonts.nunito(
-                                fontSize: 13,
-                                color: AppColors.textSecondary,
+                            const Gap(14),
+                            GestureDetector(
+                              onTap: _copy,
+                              child: Container(
+                                height: 52,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      AppColors.primary,
+                                      AppColors.accent
+                                    ],
+                                    begin: Alignment.centerLeft,
+                                    end: Alignment.centerRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                ),
+                                child: Center(
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(Icons.copy_rounded,
+                                          color: Colors.white, size: 18),
+                                      const Gap(8),
+                                      Text(
+                                        'URL 복사하기',
+                                        style: GoogleFonts.nunito(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w800,
+                                          color: Colors.white,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
                               ),
                             ),
                           ],
@@ -137,104 +327,46 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
                       ),
                     ],
                   ),
-                  const Gap(20),
-                  if (_loading)
-                    const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(24),
-                        child: CircularProgressIndicator(
-                          color: AppColors.primary,
-                        ),
-                      ),
-                    )
-                  else if (_error != null)
-                    _ErrorBox(message: _error!)
-                  else ...[
-                    Container(
-                      width: double.infinity,
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppColors.surface,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(color: AppColors.border),
-                      ),
-                      child: SelectableText(
-                        _modelUrl ?? '',
-                        style: GoogleFonts.nunito(
-                          fontSize: 12,
-                          color: AppColors.textSecondary,
-                          height: 1.45,
-                        ),
-                      ),
-                    ),
-                    const Gap(16),
-                    GestureDetector(
-                      onTap: _copy,
-                      child: Container(
-                        height: 54,
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [AppColors.primary, AppColors.accent],
-                            begin: Alignment.centerLeft,
-                            end: Alignment.centerRight,
-                          ),
-                          borderRadius: BorderRadius.circular(17),
-                        ),
-                        child: Center(
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              const Icon(
-                                Icons.copy_rounded,
-                                color: Colors.white,
-                                size: 19,
-                              ),
-                              const Gap(8),
-                              Text(
-                                'URL 복사하기',
-                                style: GoogleFonts.nunito(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.w800,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
 }
 
-class _ErrorBox extends StatelessWidget {
+class _ErrorState extends StatelessWidget {
   final String message;
+  final VoidCallback onRetry;
 
-  const _ErrorBox({required this.message});
+  const _ErrorState({required this.message, required this.onRetry});
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFF3A1D1D),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF693131)),
-      ),
-      child: Text(
-        message,
-        style: GoogleFonts.nunito(
-          fontSize: 13,
-          color: const Color(0xFFFFB8A8),
-          height: 1.45,
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(28),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.error_outline_rounded,
+                color: AppColors.primary, size: 42),
+            const Gap(16),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.nunito(
+                fontSize: 14,
+                color: AppColors.textSecondary,
+                height: 1.45,
+              ),
+            ),
+            const Gap(18),
+            TextButton(
+              onPressed: onRetry,
+              child: Text(
+                '다시 시도',
+                style: GoogleFonts.nunito(color: AppColors.primary),
+              ),
+            ),
+          ],
         ),
       ),
     );
