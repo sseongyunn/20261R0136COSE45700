@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:gap/gap.dart';
 import 'package:google_fonts/google_fonts.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../models/furniture_model.dart';
 import '../theme/app_theme.dart';
 import '../widgets/furni_image.dart';
 import '../widgets/glb_model_viewer.dart';
+import 'ar_view_screen.dart';
 import 'gallery_screen.dart';
 import 'model_url_screen.dart';
 
@@ -50,6 +50,23 @@ class _ResultScreenState extends State<ResultScreen> {
         builder: (_) => ModelUrlScreen(
           assetId: assetId,
           initialModelUrl: widget.model.modelUrl,
+        ),
+      ),
+    );
+  }
+
+  void _openAR() {
+    final url = widget.model.modelUrl;
+    if (url == null || url.isEmpty) {
+      _showSnack('3D 모델이 아직 없어요. 먼저 생성해 주세요.');
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ArViewScreen(
+          modelUrl: url,
+          modelName: widget.model.name,
         ),
       ),
     );
@@ -100,6 +117,7 @@ class _ResultScreenState extends State<ResultScreen> {
                 onShare: () => _copyModelUrl(),
                 onDownload: _openModelUrl,
                 onRegenerate: () => Navigator.pop(context),
+                onAr: _openAR,
               ),
               const Gap(24),
               _SaveButton(onTap: _openGallery),
@@ -117,121 +135,56 @@ class _ModelViewer extends StatelessWidget {
 
   const _ModelViewer({required this.model});
 
-  Future<void> _launchAR(BuildContext context, String url) async {
-    final uri = Uri.parse(url);
-    try {
-      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-      if (!launched && context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'AR을 열 수 없어요. 기기가 AR을 지원하는지 확인해 주세요.',
-              style: GoogleFonts.nunito(),
-            ),
-          ),
-        );
-      }
-    } catch (_) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              'AR 실행 중 오류가 발생했어요.',
-              style: GoogleFonts.nunito(),
-            ),
-          ),
-        );
-      }
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
     final hasModel = model.modelUrl != null && model.modelUrl!.isNotEmpty;
     final modelUrl = model.modelUrl ?? '';
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Stack(
       children: [
-        // ── 3D 뷰어 (S3 → 로컬 파일 다운로드 후 렌더링) ──
-        Stack(
-          children: [
-            ClipRRect(
-              borderRadius: BorderRadius.circular(22),
-              child: hasModel
-                  ? GlbModelViewer(modelUrl: modelUrl, height: 320)
-                  : SizedBox(
-                      height: 320,
-                      child: FurniImage(imagePath: model.imagePath),
-                    ),
-            ),
-            // 좌상단 배지
-            Positioned(
-              top: 12,
-              left: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.55),
-                  borderRadius: BorderRadius.circular(10),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(22),
+          child: hasModel
+              ? GlbModelViewer(modelUrl: modelUrl, height: 320)
+              : SizedBox(
+                  height: 320,
+                  child: FurniImage(imagePath: model.imagePath),
                 ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Container(
-                      width: 7,
-                      height: 7,
-                      decoration: BoxDecoration(
-                        color: hasModel ? AppColors.primary : AppColors.textTertiary,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const Gap(6),
-                    Text(
-                      hasModel ? '3D 뷰어 · 드래그로 회전' : '2D 미리보기',
-                      style: GoogleFonts.nunito(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w700,
-                        color: Colors.white,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ],
         ),
-        // ── AR 보기 버튼 ──
-        if (hasModel) ...[
-          const Gap(12),
-          GestureDetector(
-            onTap: () => _launchAR(context, modelUrl),
-            child: Container(
-              height: 50,
-              decoration: BoxDecoration(
-                color: AppColors.card,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(color: AppColors.primary.withValues(alpha: 0.5)),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.view_in_ar_rounded,
-                      color: AppColors.primary, size: 20),
-                  const Gap(8),
-                  Text(
-                    'AR로 실제 공간에서 보기',
-                    style: GoogleFonts.nunito(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w700,
-                      color: AppColors.primary,
-                    ),
+        // 좌상단 배지
+        Positioned(
+          top: 12,
+          left: 12,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.55),
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 7,
+                  height: 7,
+                  decoration: BoxDecoration(
+                    color: hasModel ? AppColors.primary : AppColors.textTertiary,
+                    shape: BoxShape.circle,
                   ),
-                ],
-              ),
+                ),
+                const Gap(6),
+                Text(
+                  hasModel ? '3D 뷰어 · 드래그로 회전' : '2D 미리보기',
+                  style: GoogleFonts.nunito(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
             ),
           ),
-        ],
+        ),
       ],
     );
   }
@@ -370,29 +323,78 @@ class _ActionRow extends StatelessWidget {
   final VoidCallback onShare;
   final VoidCallback onDownload;
   final VoidCallback onRegenerate;
+  final VoidCallback onAr;
 
   const _ActionRow({
     required this.onShare,
     required this.onDownload,
     required this.onRegenerate,
+    required this.onAr,
   });
 
   @override
   Widget build(BuildContext context) {
-    return Row(
+    return Column(
       children: [
-        _ActionBtn(icon: Icons.share_rounded, label: '공유', onTap: onShare),
-        const Gap(10),
-        _ActionBtn(
-          icon: Icons.download_rounded,
-          label: '다운로드',
-          onTap: onDownload,
+        // AR 버튼 — 상단 강조
+        GestureDetector(
+          onTap: onAr,
+          child: Container(
+            height: 52,
+            width: double.infinity,
+            decoration: BoxDecoration(
+              gradient: const LinearGradient(
+                colors: [Color(0xFF6C63FF), Color(0xFF3ECFCF)],
+                begin: Alignment.centerLeft,
+                end: Alignment.centerRight,
+              ),
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFF6C63FF).withValues(alpha: 0.35),
+                  blurRadius: 16,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Center(
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.view_in_ar_rounded,
+                      color: Colors.white, size: 20),
+                  const Gap(8),
+                  Text(
+                    'AR로 공간에 배치하기',
+                    style: GoogleFonts.nunito(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: Colors.white,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ),
         const Gap(10),
-        _ActionBtn(
-          icon: Icons.refresh_rounded,
-          label: '재생성',
-          onTap: onRegenerate,
+        // 기존 보조 버튼들
+        Row(
+          children: [
+            _ActionBtn(icon: Icons.share_rounded, label: '공유', onTap: onShare),
+            const Gap(10),
+            _ActionBtn(
+              icon: Icons.download_rounded,
+              label: '다운로드',
+              onTap: onDownload,
+            ),
+            const Gap(10),
+            _ActionBtn(
+              icon: Icons.refresh_rounded,
+              label: '재생성',
+              onTap: onRegenerate,
+            ),
+          ],
         ),
       ],
     );

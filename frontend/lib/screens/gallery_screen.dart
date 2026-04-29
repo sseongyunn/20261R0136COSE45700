@@ -13,6 +13,7 @@ import '../widgets/furni_image.dart';
 import 'model_url_screen.dart';
 import 'processing_screen.dart';
 import 'upload_screen.dart';
+import 'ar_view_screen.dart';
 
 class GalleryScreen extends StatefulWidget {
   const GalleryScreen({super.key});
@@ -296,10 +297,44 @@ class _StatusPill extends StatelessWidget {
   }
 }
 
-class _AssetCard extends StatelessWidget {
+class _AssetCard extends StatefulWidget {
   final FurnitureAsset asset;
 
   const _AssetCard({required this.asset});
+
+  @override
+  State<_AssetCard> createState() => _AssetCardState();
+}
+
+class _AssetCardState extends State<_AssetCard> {
+  bool _openingAR = false;
+
+  Future<void> _openAR() async {
+    if (_openingAR) return;
+    setState(() => _openingAR = true);
+    try {
+      final url = await context.read<ApiClient>().getModelUrl(widget.asset.assetId);
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ArViewScreen(
+            modelUrl: url,
+            modelName: widget.asset.displayName,
+          ),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('URL을 가져오지 못했어요.', style: GoogleFonts.nunito()),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _openingAR = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -307,7 +342,7 @@ class _AssetCard extends StatelessWidget {
       onTap: () => Navigator.push(
         context,
         MaterialPageRoute(
-          builder: (_) => ModelUrlScreen(assetId: asset.assetId),
+          builder: (_) => ModelUrlScreen(assetId: widget.asset.assetId),
         ),
       ),
       child: Container(
@@ -321,23 +356,78 @@ class _AssetCard extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(
-              child: Container(
-                width: double.infinity,
-                color: AppColors.surface,
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.view_in_ar_outlined,
-                      color: AppColors.primary,
-                      size: 38,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    color: AppColors.surface,
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.1),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.view_in_ar_outlined,
+                          color: AppColors.primary,
+                          size: 38,
+                        ),
+                      ),
                     ),
                   ),
-                ),
+                  // AR 버튼 오버레이
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: GestureDetector(
+                      onTap: _openAR,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF6C63FF), Color(0xFF3ECFCF)],
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.2),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: _openingAR 
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 12),
+                                  const Gap(4),
+                                  Text(
+                                    'AR',
+                                    style: GoogleFonts.nunito(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
             Padding(
@@ -346,7 +436,7 @@ class _AssetCard extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    asset.displayName,
+                    widget.asset.displayName,
                     style: GoogleFonts.nunito(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -358,10 +448,10 @@ class _AssetCard extends StatelessWidget {
                   const Gap(5),
                   Row(
                     children: [
-                      _CategoryChip(label: asset.displayCategory),
+                      _CategoryChip(label: widget.asset.displayCategory),
                       const Spacer(),
                       Text(
-                        _fmt(asset.createdAt),
+                        _fmt(widget.asset.createdAt),
                         style: GoogleFonts.nunito(
                           fontSize: 10,
                           color: AppColors.textTertiary,

@@ -185,36 +185,6 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
                           ),
                         ],
                       ),
-                      const Gap(12),
-                      // ── AR 보기 버튼 ──
-                      GestureDetector(
-                        onTap: _launchAR,
-                        child: Container(
-                          height: 50,
-                          decoration: BoxDecoration(
-                            color: AppColors.card,
-                            borderRadius: BorderRadius.circular(16),
-                            border: Border.all(
-                                color: AppColors.primary.withValues(alpha: 0.5)),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              const Icon(Icons.view_in_ar_rounded,
-                                  color: AppColors.primary, size: 20),
-                              const Gap(8),
-                              Text(
-                                'AR로 실제 공간에서 보기',
-                                style: GoogleFonts.nunito(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.w700,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
                       const Gap(20),
                       // ── URL 복사 카드 ──
                       Container(

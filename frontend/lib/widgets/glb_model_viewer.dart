@@ -129,13 +129,14 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
     }
 
     // 3. 로컬 파일 경로를 ModelViewer에 전달
+    // ar: true → iOS에서 AR Quick Look이 앱 내부 모달로 실행됨 (Chrome 미사용)
     return SizedBox(
       height: widget.height,
       width: double.infinity,
       child: ModelViewer(
         src: 'file://$_localFilePath',
         alt: '3D 가구 모델',
-        ar: false,
+        ar: true,
         autoRotate: true,
         cameraControls: true,
         shadowIntensity: 1,
