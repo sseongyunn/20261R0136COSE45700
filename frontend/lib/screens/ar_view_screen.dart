@@ -1,6 +1,8 @@
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:arkit_plugin/arkit_plugin.dart';
+import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
@@ -69,13 +71,21 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
     try {
       final url = widget.modelUrl;
+      final dir = await getApplicationDocumentsDirectory();
+      final fileName = 'ar_model_${url.hashCode.abs()}.glb';
+      final file = File('${dir.path}/$fileName');
 
-      // 이미 로컬 파일 경로인 경우 다운로드 생략
+      // 이미 로컬 파일 경로인 경우 복사 (documents 디렉토리에 있어야 ARKitAssetType.documents 사용 가능)
       if (url.startsWith('file://') || url.startsWith('/')) {
         final path = url.startsWith('file://') ? url.substring(7) : url;
         if (await File(path).exists()) {
-          setState(() => _localGlbPath = path);
+          if (path != file.path) {
+            await File(path).copy(file.path);
+          }
+          setState(() => _localGlbPath = fileName);
           return;
+        } else {
+          throw Exception('로컬 모델 파일을 찾을 수 없습니다.');
         }
       }
 
@@ -85,9 +95,6 @@ class _ArViewScreenState extends State<ArViewScreen> {
         throw Exception('GLB 다운로드 실패: HTTP ${response.statusCode}');
       }
 
-      final dir = await getApplicationDocumentsDirectory();
-      final fileName = 'ar_model_${url.hashCode.abs()}.glb';
-      final file = File('${dir.path}/$fileName');
       await file.writeAsBytes(response.bodyBytes);
 
       if (!mounted) return;
@@ -109,6 +116,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
     // 평면 감지 추가/업데이트
     controller.onAddNodeForAnchor = _onAnchorAdded;
     controller.onUpdateNodeForAnchor = _onAnchorUpdated;
+    controller.onARTap = _onARTap;
   }
 
   void _onAnchorAdded(ARKitAnchor anchor) {
@@ -129,6 +137,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       height: anchor.extent.z,
       materials: [
         ARKitMaterial(
+          transparency: 0.5,
           diffuse: ARKitMaterialProperty.color(
             AppColors.primary.withValues(alpha: 0.25),
           ),
@@ -144,7 +153,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
         0,
         anchor.center.z,
       ),
-      eulerAngles: vector.Vector3(-1.5708, 0, 0), // -90° → 수평으로 눕힘
+      rotation: vector.Vector4(1, 0, 0, -math.pi / 2),
     );
 
     _arkitController?.add(node, parentNodeName: anchor.nodeName);
@@ -154,80 +163,76 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   void _updatePlaneNode(ARKitPlaneAnchor anchor) {
-    // 평면 업데이트 시 단순히 기존 평면의 크기를 조정하는 대신, 
-    // 여기서는 복잡도를 줄이기 위해 업데이트 로직을 생략하거나 
-    // 노드 자체를 찾아 업데이트해야 합니다. 
-    // arkit_plugin 1.3.0에서는 updateFaceGeometry가 평면에는 적합하지 않습니다.
+    final plane = _planes[anchor.identifier];
+    if (plane != null) {
+      plane.width.value = anchor.extent.x;
+      plane.height.value = anchor.extent.z;
+    }
   }
 
   // ────────────────────────────────────────────────
   //  탭 → 모델 배치
   // ────────────────────────────────────────────────
-  Future<void> _onScreenTap(Offset tapPosition) async {
+  void _onARTap(List<ARKitTestResult> ar) {
     if (_localGlbPath == null || _arkitController == null) return;
 
+    final planeTap = ar.firstWhereOrNull(
+      (hit) => hit.type == ARKitHitTestResultType.existingPlaneUsingExtent,
+    );
+
+    if (planeTap == null) {
+      debugPrint('No plane tapped');
+      return;
+    }
+
+    _placeModel(planeTap);
+  }
+
+  Future<void> _placeModel(ARKitTestResult hit) async {
     // 기존에 배치된 모델 제거
     if (_placedNodeName != null) {
       _arkitController!.remove(_placedNodeName!);
       _placedNodeName = null;
     }
 
-    // Hit test — 감지된 평면 위의 실세계 좌표 계산
-    final hitResults = await _arkitController!.performHitTest(
-      x: tapPosition.dx,
-      y: tapPosition.dy,
-    );
-
-    if (hitResults == null || hitResults.isEmpty) return;
-
-    final hit = hitResults.first;
     final nodeName = 'furniture_${DateTime.now().millisecondsSinceEpoch}';
 
-    final node = ARKitNode(
-      name: nodeName,
-      // GLB 모델 로드 (로컬 파일)
-      geometry: ARKitBox(
-        width: 0.0001,
-        height: 0.0001,
-        length: 0.0001,
-        materials: [],
-      ),
-      position: vector.Vector3(
-        hit.worldTransform.getColumn(3).x,
-        hit.worldTransform.getColumn(3).y,
-        hit.worldTransform.getColumn(3).z,
-      ),
+    final position = vector.Vector3(
+      hit.worldTransform.getColumn(3).x,
+      hit.worldTransform.getColumn(3).y,
+      hit.worldTransform.getColumn(3).z,
     );
 
-    // ARKitNode는 직접 GLTF/GLB 파일 참조를 지원합니다
-    final gltfNode = ARKitNode(
-      name: nodeName,
-      geometry: null,
-      position: vector.Vector3(
-        hit.worldTransform.getColumn(3).x,
-        hit.worldTransform.getColumn(3).y,
-        hit.worldTransform.getColumn(3).z,
-      ),
-    );
+    debugPrint('Hit position: $position');
 
     try {
       // ARKitGltfNode 사용 — 로컬 파일 경로 전달 (AssetType.documents 사용)
       final gltfModel = ARKitGltfNode(
         assetType: AssetType.documents,
         url: _localGlbPath!,
-        scale: vector.Vector3.all(0.3),
-        position: vector.Vector3(
-          hit.worldTransform.getColumn(3).x,
-          hit.worldTransform.getColumn(3).y,
-          hit.worldTransform.getColumn(3).z,
-        ),
+        scale: vector.Vector3.all(0.3), // 모델 크기 (30%로 축소)
+        position: position,
         name: nodeName,
       );
 
       _arkitController!.add(gltfModel);
       setState(() => _placedNodeName = nodeName);
     } catch (_) {
-      // ARKitGltfNode 실패 시 박스로 대체 (디버그용)
+      // 실패할 경우 디버그용 빨간 상자로 대체
+      final node = ARKitNode(
+        name: nodeName,
+        geometry: ARKitBox(
+          width: 0.1,
+          height: 0.1,
+          length: 0.1,
+          materials: [
+            ARKitMaterial(
+              diffuse: ARKitMaterialProperty.color(Colors.red),
+            ),
+          ],
+        ),
+        position: position,
+      );
       _arkitController!.add(node);
       setState(() => _placedNodeName = nodeName);
     }
@@ -243,20 +248,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
       body: Stack(
         children: [
           // ── ARKit 카메라 뷰 ──
-          GestureDetector(
-            onTapUp: (details) {
-              final size = MediaQuery.of(context).size;
-              final pos = details.localPosition;
-              // ARKit hit-test는 0~1 정규화 좌표를 사용
-              _onScreenTap(
-                Offset(pos.dx / size.width, pos.dy / size.height),
-              );
-            },
-            child: ARKitSceneView(
-              configuration: ARKitConfiguration.worldTracking,
-              planeDetection: ARPlaneDetection.horizontal,
-              onARKitViewCreated: _onARKitViewCreated,
-            ),
+          ARKitSceneView(
+            configuration: ARKitConfiguration.worldTracking,
+            planeDetection: ARPlaneDetection.horizontal,
+            enableTapRecognizer: true,
+            onARKitViewCreated: _onARKitViewCreated,
           ),
 
           // ── 상단 헤더 ──
