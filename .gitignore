@@ -14,20 +14,17 @@ gpu_server/venv/
 *.pem
 *.key
 
-# Python
+# Python cache
 __pycache__/
 *.pyc
 
-# Hunyuan outputs / cache
+# Hunyuan generated/cache folders
 api_outputs/
 gradio_cache/
 outputs/
 generated/
 
-# Model files / weights
-models/
-checkpoints/
-weights/
+# Model weights / large binary files
 *.safetensors
 *.pt
 *.pth
@@ -41,5 +38,15 @@ weights/
 *.obj
 *.fbx
 
-# OS
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.so
+*.o
+*.cu.o
+
+# OS / editor
 .DS_Store
+.vscode/
+.idea/
