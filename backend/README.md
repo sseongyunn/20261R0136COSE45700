@@ -23,6 +23,19 @@ VARCO_TARGET_FACE_NUM=300000
 VARCO_GENERATE_TEXTURE=true
 VARCO_SEED=-1
 VARCO_CONVERT_IMAGE_TO_PNG=true
+
+# Hunyuan3D-2mv multiview server. Use the private IP when both EC2
+# instances are in the same VPC. Use http://32.192.199.25:5173 only
+# when calling it from outside AWS.
+HUNYUAN_BASE_URL=http://172.31.91.251:5173
+HUNYUAN_REQUEST_TIMEOUT_SECONDS=1800
+HUNYUAN_REMOVE_BACKGROUND=true
+HUNYUAN_TEXTURE=false
+HUNYUAN_SEED=1234
+HUNYUAN_OCTREE_RESOLUTION=384
+HUNYUAN_NUM_INFERENCE_STEPS=40
+HUNYUAN_GUIDANCE_SCALE=5.0
+HUNYUAN_NUM_CHUNKS=8000
 ```
 
 Do not set `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` on EC2. boto3 uses the EC2 IAM instance profile.
@@ -41,6 +54,10 @@ starting the worker:
 ```bash
 psql "$DATABASE_URL" -f sql/upgrade_existing.sql
 ```
+
+`source_image_id` is the single-image input for VARCO and the front image for
+Hunyuan multiview jobs. Multiview jobs additionally store back/left/right source
+image IDs and use `provider='hunyuan'`.
 
 ## Run API on EC2
 
@@ -100,3 +117,16 @@ The documented input format is PNG, so the worker converts uploaded images to
 PNG before sending them to VARCO when `VARCO_CONVERT_IMAGE_TO_PNG=true`.
 
 For pipeline testing, keep `MOCK_VARCO=true`. The worker will upload a minimal GLB file to S3 and create a `furniture_assets` row.
+
+## Hunyuan Multiview Integration
+
+The worker sends multiview jobs to the GPU server from
+`gpu_server/Hunyuan3D-2/api_server.py`:
+
+- `POST {HUNYUAN_BASE_URL}/generate`
+- JSON fields: `front`, `back`, `left`, `right`
+- each image is raw base64, not a `data:image/...` URI
+- response body is the generated GLB file
+
+Run the GPU server with systemd or directly on the GPU EC2 so that the backend
+worker can reach `http://172.31.91.251:5173/health` from the backend EC2.

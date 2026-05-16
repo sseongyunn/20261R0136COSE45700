@@ -16,7 +16,7 @@ if str(BACKEND_DIR) not in sys.path:
 
 from app.config import settings
 from app.database import SessionLocal
-from app.services import varco_service
+from app.services import hunyuan_service, varco_service
 from app.services.s3_service import (
     download_object_bytes,
     furniture_asset_model_key,
@@ -45,19 +45,33 @@ def claim_queued_job() -> Optional[dict]:
                         j.id,
                         j.user_id,
                         j.source_image_id,
+                        j.source_back_image_id,
+                        j.source_left_image_id,
+                        j.source_right_image_id,
+                        j.provider,
+                        j.generation_mode,
                         j.requested_name,
                         j.requested_category,
                         j.requested_width_cm,
                         j.requested_height_cm,
                         j.requested_depth_cm,
                         si.s3_bucket AS source_s3_bucket,
-                        si.s3_key AS source_s3_key
+                        si.s3_key AS source_s3_key,
+                        back_si.s3_bucket AS back_s3_bucket,
+                        back_si.s3_key AS back_s3_key,
+                        left_si.s3_bucket AS left_s3_bucket,
+                        left_si.s3_key AS left_s3_key,
+                        right_si.s3_bucket AS right_s3_bucket,
+                        right_si.s3_key AS right_s3_key
                     FROM generation_jobs j
                     JOIN source_images si ON si.id = j.source_image_id
+                    LEFT JOIN source_images back_si ON back_si.id = j.source_back_image_id
+                    LEFT JOIN source_images left_si ON left_si.id = j.source_left_image_id
+                    LEFT JOIN source_images right_si ON right_si.id = j.source_right_image_id
                     WHERE j.status = 'queued'
                     ORDER BY j.queued_at ASC
                     LIMIT 1
-                    FOR UPDATE SKIP LOCKED
+                    FOR UPDATE OF j SKIP LOCKED
                     """
                 )
             ).mappings().first()
@@ -211,15 +225,46 @@ def wait_for_varco_model(provider_request_id: str) -> str:
     raise TimeoutError(f"VARCO request timed out after {settings.varco_poll_timeout_seconds}s")
 
 
+def _download_hunyuan_multiview_images(job: dict) -> dict[str, bytes]:
+    sources = {
+        "front": ("source_s3_bucket", "source_s3_key"),
+        "back": ("back_s3_bucket", "back_s3_key"),
+        "left": ("left_s3_bucket", "left_s3_key"),
+        "right": ("right_s3_bucket", "right_s3_key"),
+    }
+    images: dict[str, bytes] = {}
+    for view, (bucket_key, object_key) in sources.items():
+        bucket = job.get(bucket_key)
+        key = job.get(object_key)
+        if not bucket or not key:
+            raise RuntimeError(f"Missing {view} source image for Hunyuan multiview job")
+        images[view] = download_object_bytes(bucket=bucket, key=key)
+    return images
+
+
 def process_job(job: dict) -> None:
     job_id = str(job["id"])
-    logger.info("Processing generation job %s", job_id)
+    provider = str(job.get("provider") or "varco").lower()
+    generation_mode = str(job.get("generation_mode") or "single").lower()
+    logger.info(
+        "Processing generation job %s provider=%s mode=%s",
+        job_id,
+        provider,
+        generation_mode,
+    )
 
     if settings.mock_varco:
-        provider_request_id = f"mock-{job_id}"
+        provider_request_id = f"mock-{provider}-{job_id}"
         update_provider_request_id(job_id, provider_request_id)
         model_bytes = create_mock_glb()
         logger.info("MOCK_VARCO enabled. Created mock model for job %s", job_id)
+    elif provider == "hunyuan" or generation_mode == "multiview":
+        provider_request_id = f"hunyuan-{job_id}"
+        update_provider_request_id(job_id, provider_request_id)
+        update_job_status(job_id, "submitted")
+        images = _download_hunyuan_multiview_images(job)
+        model_bytes = hunyuan_service.generate_multiview_model(images)
+        update_job_status(job_id, "processing")
     else:
         source_image_bytes = download_object_bytes(
             bucket=job["source_s3_bucket"],

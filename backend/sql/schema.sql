@@ -30,6 +30,12 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   source_image_id UUID NOT NULL REFERENCES source_images(id) ON DELETE CASCADE,
+  source_back_image_id UUID REFERENCES source_images(id) ON DELETE CASCADE,
+  source_left_image_id UUID REFERENCES source_images(id) ON DELETE CASCADE,
+  source_right_image_id UUID REFERENCES source_images(id) ON DELETE CASCADE,
+
+  generation_mode TEXT NOT NULL DEFAULT 'single'
+    CHECK (generation_mode IN ('single', 'multiview')),
 
   status TEXT NOT NULL DEFAULT 'queued'
     CHECK (status IN ('queued', 'submitted', 'processing', 'succeeded', 'failed')),
@@ -87,6 +93,9 @@ ON generation_jobs(user_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_status_queued 
 ON generation_jobs(status, queued_at);
+
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_provider_status
+ON generation_jobs(provider, status);
 
 CREATE INDEX IF NOT EXISTS idx_furniture_assets_user_created 
 ON furniture_assets(user_id, created_at DESC);
