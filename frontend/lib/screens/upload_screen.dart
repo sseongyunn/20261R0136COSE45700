@@ -13,6 +13,38 @@ import '../providers/pending_jobs_provider.dart';
 import '../theme/app_theme.dart';
 import 'processing_screen.dart';
 
+enum _UploadMode { single, multiview }
+
+enum _FurnitureView { front, back, left, right }
+
+extension _FurnitureViewText on _FurnitureView {
+  String get label {
+    switch (this) {
+      case _FurnitureView.front:
+        return '앞면';
+      case _FurnitureView.back:
+        return '뒷면';
+      case _FurnitureView.left:
+        return '왼쪽';
+      case _FurnitureView.right:
+        return '오른쪽';
+    }
+  }
+
+  String get helper {
+    switch (this) {
+      case _FurnitureView.front:
+        return '정면 사진';
+      case _FurnitureView.back:
+        return '후면 사진';
+      case _FurnitureView.left:
+        return '좌측 사진';
+      case _FurnitureView.right:
+        return '우측 사진';
+    }
+  }
+}
+
 class UploadScreen extends StatefulWidget {
   const UploadScreen({super.key});
 
@@ -27,13 +59,23 @@ class _UploadScreenState extends State<UploadScreen> {
   final _heightController = TextEditingController();
   final _depthController = TextEditingController();
 
+  _UploadMode _mode = _UploadMode.single;
   XFile? _xfile;
   Uint8List? _bytes;
+  final Map<_FurnitureView, XFile> _viewFiles = {};
+  final Map<_FurnitureView, Uint8List> _viewBytes = {};
   bool _analyzed = false;
   bool _submitting = false;
   String? _error;
 
   bool get _hasImage => _xfile != null && _bytes != null;
+
+  bool get _hasMultiviewImages => _FurnitureView.values.every(
+    (view) => _viewFiles[view] != null && _viewBytes[view] != null,
+  );
+
+  bool get _hasRequiredImages =>
+      _mode == _UploadMode.single ? _hasImage : _hasMultiviewImages;
 
   @override
   void dispose() {
@@ -45,7 +87,18 @@ class _UploadScreenState extends State<UploadScreen> {
     super.dispose();
   }
 
-  Future<void> _pick() async {
+  void _changeMode(_UploadMode mode) {
+    if (_mode == mode || _submitting) return;
+    setState(() {
+      _mode = mode;
+      _analyzed = _hasRequiredImages;
+      _error = null;
+    });
+  }
+
+  Future<void> _pick({_FurnitureView? view}) async {
+    if (_mode == _UploadMode.multiview && view == null) return;
+
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
       maxWidth: 1920,
@@ -56,25 +109,77 @@ class _UploadScreenState extends State<UploadScreen> {
 
     final bytes = await picked.readAsBytes();
     setState(() {
-      _xfile = picked;
-      _bytes = bytes;
+      if (_mode == _UploadMode.single) {
+        _xfile = picked;
+        _bytes = bytes;
+      } else {
+        _viewFiles[view!] = picked;
+        _viewBytes[view] = bytes;
+      }
       _analyzed = false;
       _error = null;
     });
 
+    if (!_hasRequiredImages) return;
     await Future.delayed(const Duration(milliseconds: 900));
-    if (mounted) setState(() => _analyzed = true);
+    if (mounted && _hasRequiredImages) setState(() => _analyzed = true);
   }
 
-  String get _storagePath {
+  void _removeSingleImage() {
+    setState(() {
+      _xfile = null;
+      _bytes = null;
+      _analyzed = false;
+    });
+  }
+
+  void _removeViewImage(_FurnitureView view) {
+    setState(() {
+      _viewFiles.remove(view);
+      _viewBytes.remove(view);
+      _analyzed = false;
+    });
+  }
+
+  String _storagePathFor(XFile file, Uint8List bytes) {
     if (kIsWeb) {
-      return 'data:image/jpeg;base64,${base64Encode(_bytes!)}';
+      return 'data:image/jpeg;base64,${base64Encode(bytes)}';
     }
-    return _xfile!.path;
+    return file.path;
+  }
+
+  String get _primaryStoragePath {
+    if (_mode == _UploadMode.single) {
+      return _storagePathFor(_xfile!, _bytes!);
+    }
+    return _storagePathFor(
+      _viewFiles[_FurnitureView.front]!,
+      _viewBytes[_FurnitureView.front]!,
+    );
+  }
+
+  Future<UploadTicket> _uploadSourceImage(
+    ApiClient api,
+    XFile file,
+    Uint8List bytes,
+  ) async {
+    final extension = _extensionFor(file.name);
+    final contentType = _contentTypeFor(extension);
+    final ticket = await api.requestSourceImageUploadUrl(
+      extension: extension,
+      contentType: contentType,
+    );
+    await api.uploadBytesToPresignedUrl(
+      uploadUrl: ticket.uploadUrl,
+      bytes: bytes,
+      contentType: contentType,
+    );
+    await api.completeSourceImage(ticket);
+    return ticket;
   }
 
   Future<void> _convert() async {
-    if (!_hasImage || !_analyzed || _submitting) return;
+    if (!_hasRequiredImages || !_analyzed || _submitting) return;
 
     final name = _nameController.text.trim();
     final category = _categoryController.text.trim();
@@ -91,32 +196,49 @@ class _UploadScreenState extends State<UploadScreen> {
     try {
       final api = context.read<ApiClient>();
       final pendingJobs = context.read<PendingJobsProvider>();
-      final extension = _extensionFor(_xfile!.name);
-      final contentType = _contentTypeFor(extension);
-      final ticket = await api.requestSourceImageUploadUrl(
-        extension: extension,
-        contentType: contentType,
-      );
-      await api.uploadBytesToPresignedUrl(
-        uploadUrl: ticket.uploadUrl,
-        bytes: _bytes!,
-        contentType: contentType,
-      );
-      await api.completeSourceImage(ticket);
-      final job = await api.createGenerationJob(
-        sourceImageId: ticket.sourceImageId,
-        name: name,
-        category: category,
-        widthCm: _parseDouble(_widthController.text),
-        heightCm: _parseDouble(_heightController.text),
-        depthCm: _parseDouble(_depthController.text),
-      );
+      late final GenerationJob job;
+
+      if (_mode == _UploadMode.single) {
+        final ticket = await _uploadSourceImage(api, _xfile!, _bytes!);
+        job = await api.createGenerationJob(
+          sourceImageId: ticket.sourceImageId,
+          name: name,
+          category: category,
+          generationMode: 'single',
+          widthCm: _parseDouble(_widthController.text),
+          heightCm: _parseDouble(_heightController.text),
+          depthCm: _parseDouble(_depthController.text),
+        );
+      } else {
+        final tickets = <_FurnitureView, UploadTicket>{};
+        for (final view in _FurnitureView.values) {
+          tickets[view] = await _uploadSourceImage(
+            api,
+            _viewFiles[view]!,
+            _viewBytes[view]!,
+          );
+        }
+        job = await api.createGenerationJob(
+          sourceImageId: tickets[_FurnitureView.front]!.sourceImageId,
+          backSourceImageId: tickets[_FurnitureView.back]!.sourceImageId,
+          leftSourceImageId: tickets[_FurnitureView.left]!.sourceImageId,
+          rightSourceImageId: tickets[_FurnitureView.right]!.sourceImageId,
+          name: name,
+          category: category,
+          generationMode: 'multiview',
+          widthCm: _parseDouble(_widthController.text),
+          heightCm: _parseDouble(_heightController.text),
+          depthCm: _parseDouble(_depthController.text),
+        );
+      }
+
+      final imagePath = _primaryStoragePath;
       await pendingJobs.add(
         PendingGenerationJob(
           jobId: job.jobId,
           name: name,
           category: category,
-          imagePath: _storagePath,
+          imagePath: imagePath,
           dimensions: _dimensionText,
           status: job.status,
           createdAt: DateTime.now(),
@@ -129,7 +251,7 @@ class _UploadScreenState extends State<UploadScreen> {
         PageRouteBuilder(
           pageBuilder: (context, a, secondaryAnimation) => ProcessingScreen(
             jobId: job.jobId,
-            imagePath: _storagePath,
+            imagePath: imagePath,
             requestedName: name,
             requestedCategory: category,
             requestedDimensions: _dimensionText,
@@ -185,6 +307,8 @@ class _UploadScreenState extends State<UploadScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isMultiview = _mode == _UploadMode.multiview;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('새 모델 만들기'),
@@ -200,34 +324,45 @@ class _UploadScreenState extends State<UploadScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '가구가 잘 보이는 사진을 골라주세요',
+                isMultiview
+                    ? '가구의 앞, 뒤, 왼쪽, 오른쪽 사진을 등록해주세요'
+                    : '가구가 잘 보이는 사진을 골라주세요',
                 style: GoogleFonts.nunito(
                   fontSize: 14,
                   color: AppColors.textSecondary,
                 ),
               ),
-              const Gap(20),
-              GestureDetector(
-                onTap: _submitting ? null : _pick,
-                child: _hasImage
-                    ? _Preview(
-                        bytes: _bytes!,
-                        onRemove: _submitting
-                            ? null
-                            : () => setState(() {
-                                _xfile = null;
-                                _bytes = null;
-                                _analyzed = false;
-                              }),
-                      )
-                    : const _UploadArea(),
+              const Gap(16),
+              _ModeSelector(
+                mode: _mode,
+                onChanged: _changeMode,
+                disabled: _submitting,
               ),
-              if (_hasImage) ...[
+              if (isMultiview) ...[const Gap(14), const _MultiviewGuide()],
+              const Gap(20),
+              if (isMultiview)
+                _MultiviewPickerGrid(
+                  viewBytes: _viewBytes,
+                  submitting: _submitting,
+                  onPick: (view) => _pick(view: view),
+                  onRemove: _removeViewImage,
+                )
+              else
+                GestureDetector(
+                  onTap: _submitting ? null : _pick,
+                  child: _hasImage
+                      ? _Preview(
+                          bytes: _bytes!,
+                          onRemove: _submitting ? null : _removeSingleImage,
+                        )
+                      : const _UploadArea(),
+                ),
+              if (_hasRequiredImages) ...[
                 const Gap(18),
                 AnimatedOpacity(
                   opacity: _analyzed ? 1.0 : 0.0,
                   duration: const Duration(milliseconds: 500),
-                  child: const _AnalysisCard(),
+                  child: _AnalysisCard(mode: _mode),
                 ),
                 const Gap(18),
                 _RequestForm(
@@ -244,12 +379,338 @@ class _UploadScreenState extends State<UploadScreen> {
               ],
               const Gap(28),
               _ConvertButton(
-                enabled: _hasImage && _analyzed && !_submitting,
+                enabled: _hasRequiredImages && _analyzed && !_submitting,
                 loading: _submitting,
                 onTap: _convert,
               ),
             ],
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ModeSelector extends StatelessWidget {
+  final _UploadMode mode;
+  final ValueChanged<_UploadMode> onChanged;
+  final bool disabled;
+
+  const _ModeSelector({
+    required this.mode,
+    required this.onChanged,
+    required this.disabled,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(4),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.border),
+      ),
+      child: Row(
+        children: [
+          _ModeButton(
+            label: '단일 이미지',
+            icon: Icons.image_outlined,
+            selected: mode == _UploadMode.single,
+            onTap: disabled ? null : () => onChanged(_UploadMode.single),
+          ),
+          _ModeButton(
+            label: '멀티뷰',
+            icon: Icons.view_in_ar_outlined,
+            selected: mode == _UploadMode.multiview,
+            onTap: disabled ? null : () => onChanged(_UploadMode.multiview),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModeButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback? onTap;
+
+  const _ModeButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Expanded(
+      child: GestureDetector(
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
+          height: 44,
+          decoration: BoxDecoration(
+            color: selected ? AppColors.primary : Colors.transparent,
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                icon,
+                size: 18,
+                color: selected ? Colors.white : AppColors.textSecondary,
+              ),
+              const Gap(8),
+              Text(
+                label,
+                style: GoogleFonts.nunito(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w800,
+                  color: selected ? Colors.white : AppColors.textSecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _MultiviewGuide extends StatelessWidget {
+  const _MultiviewGuide();
+
+  @override
+  Widget build(BuildContext context) {
+    const tips = [
+      '네 방향 모두 같은 조명과 배경에서 촬영해주세요.',
+      '카메라와 가구 사이 거리를 최대한 비슷하게 유지해주세요.',
+      '색감이 바뀌지 않도록 같은 노출과 화이트밸런스를 권장합니다.',
+      '가구가 잘리지 않게 중앙에 맞춰주세요.',
+    ];
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.card,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.28)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.12),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.tips_and_updates_outlined,
+                  size: 18,
+                  color: AppColors.primary,
+                ),
+              ),
+              const Gap(10),
+              Text(
+                '멀티뷰 촬영 팁',
+                style: GoogleFonts.nunito(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.textPrimary,
+                ),
+              ),
+            ],
+          ),
+          const Gap(12),
+          for (final tip in tips)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 7),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    width: 5,
+                    height: 5,
+                    margin: const EdgeInsets.only(top: 8, right: 10),
+                    decoration: const BoxDecoration(
+                      color: AppColors.primary,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
+                  Expanded(
+                    child: Text(
+                      tip,
+                      style: GoogleFonts.nunito(
+                        fontSize: 12.5,
+                        height: 1.45,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MultiviewPickerGrid extends StatelessWidget {
+  final Map<_FurnitureView, Uint8List> viewBytes;
+  final bool submitting;
+  final ValueChanged<_FurnitureView> onPick;
+  final ValueChanged<_FurnitureView> onRemove;
+
+  const _MultiviewPickerGrid({
+    required this.viewBytes,
+    required this.submitting,
+    required this.onPick,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GridView.count(
+      crossAxisCount: 2,
+      shrinkWrap: true,
+      physics: const NeverScrollableScrollPhysics(),
+      mainAxisSpacing: 12,
+      crossAxisSpacing: 12,
+      childAspectRatio: 0.95,
+      children: [
+        for (final view in _FurnitureView.values)
+          _ViewTile(
+            view: view,
+            bytes: viewBytes[view],
+            onTap: submitting ? null : () => onPick(view),
+            onRemove: submitting ? null : () => onRemove(view),
+          ),
+      ],
+    );
+  }
+}
+
+class _ViewTile extends StatelessWidget {
+  final _FurnitureView view;
+  final Uint8List? bytes;
+  final VoidCallback? onTap;
+  final VoidCallback? onRemove;
+
+  const _ViewTile({
+    required this.view,
+    required this.bytes,
+    required this.onTap,
+    required this.onRemove,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final hasImage = bytes != null;
+
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          color: AppColors.card,
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: hasImage
+                ? AppColors.primary.withValues(alpha: 0.45)
+                : AppColors.border,
+          ),
+        ),
+        clipBehavior: Clip.hardEdge,
+        child: Stack(
+          fit: StackFit.expand,
+          children: [
+            if (hasImage)
+              Image.memory(bytes!, fit: BoxFit.cover)
+            else
+              Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.add_photo_alternate_outlined,
+                      color: AppColors.primary,
+                      size: 24,
+                    ),
+                  ),
+                  const Gap(12),
+                  Text(
+                    view.label,
+                    style: GoogleFonts.nunito(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.textPrimary,
+                    ),
+                  ),
+                  const Gap(4),
+                  Text(
+                    view.helper,
+                    style: GoogleFonts.nunito(
+                      fontSize: 11,
+                      color: AppColors.textTertiary,
+                    ),
+                  ),
+                ],
+              ),
+            Positioned(
+              left: 10,
+              top: 10,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+                decoration: BoxDecoration(
+                  color: hasImage
+                      ? Colors.black.withValues(alpha: 0.58)
+                      : AppColors.surface,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  view.label,
+                  style: GoogleFonts.nunito(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: hasImage ? Colors.white : AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ),
+            if (hasImage)
+              Positioned(
+                top: 10,
+                right: 10,
+                child: GestureDetector(
+                  onTap: onRemove,
+                  child: Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.55),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.close_rounded,
+                      color: Colors.white,
+                      size: 16,
+                    ),
+                  ),
+                ),
+              ),
+          ],
         ),
       ),
     );
@@ -353,10 +814,16 @@ class _Preview extends StatelessWidget {
 }
 
 class _AnalysisCard extends StatelessWidget {
-  const _AnalysisCard();
+  final _UploadMode mode;
+
+  const _AnalysisCard({required this.mode});
 
   @override
   Widget build(BuildContext context) {
+    final labels = mode == _UploadMode.multiview
+        ? ['앞·뒤·왼쪽·오른쪽 이미지 준비됨', '색상과 거리 일관성 확인됨', 'Hunyuan 멀티뷰 생성 가능']
+        : ['이미지 품질 양호', '가구 오브젝트 감지됨', 'AI 3D 생성 가능'];
+
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -389,7 +856,7 @@ class _AnalysisCard extends StatelessWidget {
             ],
           ),
           const Gap(12),
-          for (final label in ['이미지 품질 양호', '가구 오브젝트 감지됨', 'VARCO 3D 생성 가능'])
+          for (final label in labels)
             Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: Row(
@@ -403,11 +870,13 @@ class _AnalysisCard extends StatelessWidget {
                       shape: BoxShape.circle,
                     ),
                   ),
-                  Text(
-                    label,
-                    style: GoogleFonts.nunito(
-                      fontSize: 13,
-                      color: AppColors.textSecondary,
+                  Expanded(
+                    child: Text(
+                      label,
+                      style: GoogleFonts.nunito(
+                        fontSize: 13,
+                        color: AppColors.textSecondary,
+                      ),
                     ),
                   ),
                 ],

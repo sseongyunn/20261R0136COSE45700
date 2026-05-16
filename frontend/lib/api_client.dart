@@ -40,6 +40,8 @@ class UploadTicket {
 class GenerationJob {
   final String jobId;
   final String status;
+  final String? provider;
+  final String? generationMode;
   final String? providerRequestId;
   final String? assetId;
   final String? failureReason;
@@ -47,6 +49,8 @@ class GenerationJob {
   const GenerationJob({
     required this.jobId,
     required this.status,
+    this.provider,
+    this.generationMode,
     this.providerRequestId,
     this.assetId,
     this.failureReason,
@@ -55,6 +59,8 @@ class GenerationJob {
   factory GenerationJob.fromJson(Map<String, dynamic> json) => GenerationJob(
     jobId: json['jobId'] as String,
     status: json['status'] as String,
+    provider: json['provider'] as String?,
+    generationMode: json['generationMode'] as String?,
     providerRequestId: json['providerRequestId'] as String?,
     assetId: json['assetId'] as String?,
     failureReason: json['failureReason'] as String?,
@@ -201,18 +207,34 @@ class ApiClient extends ChangeNotifier {
     required String sourceImageId,
     required String name,
     required String category,
+    String generationMode = 'single',
+    String? backSourceImageId,
+    String? leftSourceImageId,
+    String? rightSourceImageId,
     double? widthCm,
     double? heightCm,
     double? depthCm,
   }) async {
-    final json = await _postJson('/generation-jobs', {
+    final body = <String, dynamic>{
       'sourceImageId': sourceImageId,
+      'generationMode': generationMode,
       'name': name,
       'category': category,
       'widthCm': widthCm,
       'heightCm': heightCm,
       'depthCm': depthCm,
-    });
+    };
+    if (backSourceImageId != null) {
+      body['backSourceImageId'] = backSourceImageId;
+    }
+    if (leftSourceImageId != null) {
+      body['leftSourceImageId'] = leftSourceImageId;
+    }
+    if (rightSourceImageId != null) {
+      body['rightSourceImageId'] = rightSourceImageId;
+    }
+
+    final json = await _postJson('/generation-jobs', body);
     return GenerationJob.fromJson(json);
   }
 
