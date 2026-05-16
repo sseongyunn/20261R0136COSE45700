@@ -1,4 +1,45 @@
+# Local frontend
+flutter_app/
+
+# Virtual environments
+venv/
+backend/venv/
+gpu_server/venv/
+.venv/
+
+# Env / secrets
 .env
-.venv
-__pycache__
-/flutter_app
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Python
+__pycache__/
+*.pyc
+
+# Hunyuan outputs / cache
+api_outputs/
+gradio_cache/
+outputs/
+generated/
+
+# Model files / weights
+models/
+checkpoints/
+weights/
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.onnx
+
+# 3D outputs
+*.glb
+*.gltf
+*.obj
+*.fbx
+
+# OS
+.DS_Store
