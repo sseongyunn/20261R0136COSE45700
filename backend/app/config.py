@@ -40,6 +40,7 @@ class Settings:
     hunyuan_num_inference_steps: int
     hunyuan_guidance_scale: float
     hunyuan_num_chunks: int
+    hunyuan_face_count: int
     mock_varco: bool
     access_token_expire_hours: int = 24
     upload_url_expire_seconds: int = 900
@@ -108,10 +109,11 @@ def get_settings() -> Settings:
         hunyuan_remove_background=_bool_env("HUNYUAN_REMOVE_BACKGROUND", default=True),
         hunyuan_texture=_bool_env("HUNYUAN_TEXTURE", default=False),
         hunyuan_seed=_int_env("HUNYUAN_SEED", 1234),
-        hunyuan_octree_resolution=_int_env("HUNYUAN_OCTREE_RESOLUTION", 384),
+        hunyuan_octree_resolution=_int_env("HUNYUAN_OCTREE_RESOLUTION", 512),
         hunyuan_num_inference_steps=_int_env("HUNYUAN_NUM_INFERENCE_STEPS", 40),
         hunyuan_guidance_scale=_float_env("HUNYUAN_GUIDANCE_SCALE", 5.0),
         hunyuan_num_chunks=_int_env("HUNYUAN_NUM_CHUNKS", 8000),
+        hunyuan_face_count=_int_env("HUNYUAN_FACE_COUNT", 1000000),
         mock_varco=_bool_env("MOCK_VARCO", default=False),
         access_token_expire_hours=_int_env("ACCESS_TOKEN_EXPIRE_HOURS", 24),
         upload_url_expire_seconds=_int_env("UPLOAD_URL_EXPIRE_SECONDS", 900),

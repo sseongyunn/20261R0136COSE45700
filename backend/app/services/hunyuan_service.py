@@ -37,6 +37,8 @@ def generate_multiview_model(images: Dict[str, bytes]) -> bytes:
         "num_inference_steps": settings.hunyuan_num_inference_steps,
         "guidance_scale": settings.hunyuan_guidance_scale,
         "num_chunks": settings.hunyuan_num_chunks,
+        "face_count": settings.hunyuan_face_count,
+        "target_face_num": settings.hunyuan_face_count,
     }
     url = f"{settings.hunyuan_base_url.rstrip('/')}/generate"
     response = requests.post(

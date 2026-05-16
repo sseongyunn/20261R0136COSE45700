@@ -32,10 +32,11 @@ HUNYUAN_REQUEST_TIMEOUT_SECONDS=1800
 HUNYUAN_REMOVE_BACKGROUND=true
 HUNYUAN_TEXTURE=false
 HUNYUAN_SEED=1234
-HUNYUAN_OCTREE_RESOLUTION=384
+HUNYUAN_OCTREE_RESOLUTION=512
 HUNYUAN_NUM_INFERENCE_STEPS=40
 HUNYUAN_GUIDANCE_SCALE=5.0
 HUNYUAN_NUM_CHUNKS=8000
+HUNYUAN_FACE_COUNT=1000000
 ```
 
 Do not set `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` on EC2. boto3 uses the EC2 IAM instance profile.
@@ -125,8 +126,20 @@ The worker sends multiview jobs to the GPU server from
 
 - `POST {HUNYUAN_BASE_URL}/generate`
 - JSON fields: `front`, `back`, `left`, `right`
+- mesh controls: `octree_resolution`, `face_count`, `target_face_num`
 - each image is raw base64, not a `data:image/...` URI
 - response body is the generated GLB file
+
+For maximum mesh density, start with:
+
+```bash
+HUNYUAN_OCTREE_RESOLUTION=512
+HUNYUAN_FACE_COUNT=1000000
+```
+
+`HUNYUAN_FACE_COUNT` is sent as both `face_count` and `target_face_num`. In the
+current GPU server, it is used as the maximum face count during the texture
+cleanup/reduction step.
 
 Run the GPU server with systemd or directly on the GPU EC2 so that the backend
 worker can reach `http://172.31.91.251:5173/health` from the backend EC2.

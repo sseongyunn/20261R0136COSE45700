@@ -215,6 +215,7 @@ class ModelWorker:
 
         file_type = params.get("type", params.get("file_type", "glb"))
         texture_enabled = params.get("texture", False)
+        face_count = int(params.get("face_count", params.get("target_face_num", 1000000)))
 
         if "mesh" in params and params.get("mesh"):
             logger.info("Loading input mesh from request.")
@@ -256,7 +257,7 @@ class ModelWorker:
             logger.info("Starting mesh cleanup before texture...")
             mesh = FloaterRemover()(mesh)
             mesh = DegenerateFaceRemover()(mesh)
-            mesh = FaceReducer()(mesh, max_facenum=params.get("face_count", 40000))
+            mesh = FaceReducer()(mesh, max_facenum=face_count)
 
             texture_image = image["front"] if isinstance(image, dict) else image
 
