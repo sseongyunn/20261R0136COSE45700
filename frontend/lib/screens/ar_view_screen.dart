@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 
@@ -21,10 +22,14 @@ class ArViewScreen extends StatefulWidget {
   /// 가구 이름 (상단 표시용)
   final String modelName;
 
+  /// 가구 실제 크기 (예: "120 × 60 × 75 cm")
+  final String? dimensions;
+
   const ArViewScreen({
     super.key,
     required this.modelUrl,
     required this.modelName,
+    this.dimensions,
   });
 
   @override
@@ -39,6 +44,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
   // 현재 배치된 모델 노드 이름
   String? _placedNodeName;
+
+  // 중앙 Raycast 타이머
+  Timer? _raycastTimer;
+  // 타겟 위치 (Raycast 성공 시)
+  vector.Vector3? _reticlePosition;
 
   // GLB 로컬 파일 경로 (다운로드 완료 후 세팅)
   String? _localGlbPath;
@@ -56,6 +66,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
   @override
   void dispose() {
+    _raycastTimer?.cancel();
     _arkitController?.dispose();
     super.dispose();
   }
@@ -75,14 +86,16 @@ class _ArViewScreenState extends State<ArViewScreen> {
       final fileName = 'ar_model_${url.hashCode.abs()}.glb';
       final file = File('${dir.path}/$fileName');
 
-      // 이미 로컬 파일 경로인 경우 복사 (documents 디렉토리에 있어야 ARKitAssetType.documents 사용 가능)
       if (url.startsWith('file://') || url.startsWith('/')) {
         final path = url.startsWith('file://') ? url.substring(7) : url;
         if (await File(path).exists()) {
           if (path != file.path) {
             await File(path).copy(file.path);
           }
-          setState(() => _localGlbPath = fileName);
+          if (!mounted) return;
+          setState(() {
+            _localGlbPath = fileName;
+          });
           return;
         } else {
           throw Exception('로컬 모델 파일을 찾을 수 없습니다.');
@@ -99,7 +112,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
       if (!mounted) return;
       // arkit_plugin의 AssetType.documents는 Documents 폴더 기준 상대 경로를 기대하므로 파일명만 저장
-      setState(() => _localGlbPath = fileName);
+      setState(() {
+        _localGlbPath = fileName;
+      });
     } catch (e) {
       if (mounted) setState(() => _downloadError = e.toString());
     } finally {
@@ -116,7 +131,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
     // 평면 감지 추가/업데이트
     controller.onAddNodeForAnchor = _onAnchorAdded;
     controller.onUpdateNodeForAnchor = _onAnchorUpdated;
-    controller.onARTap = _onARTap;
+    
+    // 100ms마다 화면 중앙 Raycast
+    _raycastTimer = Timer.periodic(const Duration(milliseconds: 100), (_) => _performRaycast());
   }
 
   void _onAnchorAdded(ARKitAnchor anchor) {
@@ -173,22 +190,40 @@ class _ArViewScreenState extends State<ArViewScreen> {
   // ────────────────────────────────────────────────
   //  탭 → 모델 배치
   // ────────────────────────────────────────────────
-  void _onARTap(List<ARKitTestResult> ar) {
-    if (_localGlbPath == null || _arkitController == null) return;
+  void _performRaycast() async {
+    if (_arkitController == null || _placedNodeName != null) return;
+    
+    // 화면 크기를 가져올 수 없는 초기 상태 방어
+    if (!mounted) return;
+    final size = MediaQuery.of(context).size;
+    final hits = await _arkitController!.performHitTest(
+      x: 0.5,
+      y: 0.5,
+    );
 
-    final planeTap = ar.firstWhereOrNull(
+    final planeHit = hits.firstWhereOrNull(
       (hit) => hit.type == ARKitHitTestResultType.existingPlaneUsingExtent,
     );
 
-    if (planeTap == null) {
-      debugPrint('No plane tapped');
-      return;
+    if (planeHit != null) {
+      final newPos = vector.Vector3(
+        planeHit.worldTransform.getColumn(3).x,
+        planeHit.worldTransform.getColumn(3).y,
+        planeHit.worldTransform.getColumn(3).z,
+      );
+      if (_reticlePosition != newPos && mounted) {
+        setState(() => _reticlePosition = newPos);
+      }
+    } else {
+      if (_reticlePosition != null && mounted) {
+        setState(() => _reticlePosition = null);
+      }
     }
-
-    _placeModel(planeTap);
   }
 
-  Future<void> _placeModel(ARKitTestResult hit) async {
+  Future<void> _placeModel() async {
+    if (_reticlePosition == null || _localGlbPath == null || _arkitController == null) return;
+
     // 기존에 배치된 모델 제거
     if (_placedNodeName != null) {
       _arkitController!.remove(_placedNodeName!);
@@ -197,11 +232,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
     final nodeName = 'furniture_${DateTime.now().millisecondsSinceEpoch}';
 
-    final position = vector.Vector3(
-      hit.worldTransform.getColumn(3).x,
-      hit.worldTransform.getColumn(3).y,
-      hit.worldTransform.getColumn(3).z,
-    );
+    final position = _reticlePosition!;
 
     debugPrint('Hit position: $position');
 
@@ -210,12 +241,13 @@ class _ArViewScreenState extends State<ArViewScreen> {
       final gltfModel = ARKitGltfNode(
         assetType: AssetType.documents,
         url: _localGlbPath!,
-        scale: vector.Vector3.all(0.3), // 모델 크기 (30%로 축소)
+        scale: vector.Vector3.all(0.3), // 0.3배 하드코딩으로 복구
         position: position,
         name: nodeName,
       );
 
       _arkitController!.add(gltfModel);
+
       setState(() => _placedNodeName = nodeName);
     } catch (_) {
       // 실패할 경우 디버그용 빨간 상자로 대체
@@ -251,7 +283,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
           ARKitSceneView(
             configuration: ARKitConfiguration.worldTracking,
             planeDetection: ARPlaneDetection.horizontal,
-            enableTapRecognizer: true,
+            enableTapRecognizer: false,
             onARKitViewCreated: _onARKitViewCreated,
           ),
 
@@ -275,18 +307,36 @@ class _ArViewScreenState extends State<ArViewScreen> {
               onRetry: _downloadModel,
             )
           else ...[
-            // 평면 미감지 안내
+            // 평면 미감지 (스캔 강제)
             if (!_planeDetected)
-              const _HintBadge(
-                icon: Icons.screen_rotation_rounded,
-                text: '카메라를 바닥이나 테이블에 향해주세요',
+              Container(
+                color: Colors.black.withValues(alpha: 0.3),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.screen_search_desktop_rounded, color: Colors.white, size: 60),
+                      const SizedBox(height: 20),
+                      Text(
+                        '카메라를 좌우로 천천히 움직여\n바닥을 스캔해주세요',
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.nunito(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w700,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
               ),
 
-            // 평면 감지 후 탭 안내
+            // 평면 감지 후 가이드 안내
             if (_planeDetected && _placedNodeName == null)
               const _HintBadge(
-                icon: Icons.touch_app_rounded,
-                text: '감지된 평면을 탭해서 가구를 배치하세요',
+                icon: Icons.center_focus_strong_rounded,
+                text: '화면 중앙 과녁을 바닥에 맞추세요',
                 isReady: true,
               ),
 
@@ -294,8 +344,35 @@ class _ArViewScreenState extends State<ArViewScreen> {
             if (_placedNodeName != null)
               const _HintBadge(
                 icon: Icons.check_circle_outline_rounded,
-                text: '다른 곳을 탭하면 위치를 바꿀 수 있어요',
+                text: '하단의 제거 버튼을 눌러 다시 배치할 수 있어요',
                 isSuccess: true,
+              ),
+
+            // 조준점 (Reticle) 오버레이 위젯
+            if (_planeDetected && _placedNodeName == null)
+              Center(
+                child: Container(
+                  width: 50,
+                  height: 50,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: _reticlePosition != null
+                          ? AppColors.primary
+                          : Colors.white.withValues(alpha: 0.5),
+                      width: 2,
+                    ),
+                    color: _reticlePosition != null
+                        ? AppColors.primary.withValues(alpha: 0.2)
+                        : Colors.transparent,
+                  ),
+                  child: Icon(
+                    Icons.add_rounded,
+                    color: _reticlePosition != null
+                        ? AppColors.primary
+                        : Colors.white.withValues(alpha: 0.5),
+                  ),
+                ),
               ),
           ],
 
@@ -306,6 +383,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
             right: 0,
             child: _BottomBar(
               hasModel: _placedNodeName != null,
+              canPlace: _reticlePosition != null,
+              onPlace: _placeModel,
               onRemove: () {
                 if (_placedNodeName != null) {
                   _arkitController?.remove(_placedNodeName!);
@@ -423,9 +502,16 @@ class _TopBar extends StatelessWidget {
 
 class _BottomBar extends StatelessWidget {
   final bool hasModel;
+  final bool canPlace;
+  final VoidCallback onPlace;
   final VoidCallback onRemove;
 
-  const _BottomBar({required this.hasModel, required this.onRemove});
+  const _BottomBar({
+    required this.hasModel,
+    required this.canPlace,
+    required this.onPlace,
+    required this.onRemove,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -455,15 +541,15 @@ class _BottomBar extends StatelessWidget {
               label: '제거',
               onTap: onRemove,
             ),
-            const SizedBox(width: 16),
+          ] else ...[
+            _ControlBtn(
+              icon: Icons.add_box_rounded,
+              label: '이 위치에 배치하기',
+              isWide: true,
+              subtle: !canPlace,
+              onTap: canPlace ? onPlace : () {},
+            ),
           ],
-          _ControlBtn(
-            icon: Icons.info_outline_rounded,
-            label: '바닥/테이블을 탭해 배치',
-            isWide: true,
-            subtle: true,
-            onTap: () {},
-          ),
         ],
       ),
     );
