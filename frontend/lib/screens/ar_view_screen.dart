@@ -41,6 +41,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
   // 감지된 평면 목록
   final Map<String, ARKitPlane> _planes = {};
+  final Map<String, ARKitPlaneAnchor> _planeAnchors = {};
+  final Set<String> _horizontalPlaneIds = {};
+  final Set<String> _verticalPlaneIds = {};
 
   // 현재 배치된 모델 노드 이름
   String? _placedNodeName;
@@ -56,7 +59,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
   String? _downloadError;
 
   // 평면 감지 여부
-  bool get _planeDetected => _planes.isNotEmpty;
+  bool get _planeDetected => _horizontalPlaneIds.isNotEmpty;
 
   @override
   void initState() {
@@ -149,15 +152,30 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   void _addPlaneNode(ARKitPlaneAnchor anchor) {
+    _planeAnchors[anchor.identifier] = anchor;
+
+    // 평면의 월드 기준 법선 벡터(Normal) 추출 (Y축 성분)
+    final normalY = anchor.transform.getColumn(1).y;
+    // 수평면은 법선 벡터가 위(또는 아래)를 향하므로 Y 성분의 절대값이 큽니다.
+    final isHorizontal = normalY.abs() > 0.8;
+
+    if (isHorizontal) {
+      _horizontalPlaneIds.add(anchor.identifier);
+    } else {
+      _verticalPlaneIds.add(anchor.identifier);
+    }
+
+    final color = isHorizontal
+        ? AppColors.primary.withValues(alpha: 0.25)
+        : Colors.blueAccent.withValues(alpha: 0.3); // 벽면은 파란색으로 표시
+
     final plane = ARKitPlane(
       width: anchor.extent.x,
       height: anchor.extent.z,
       materials: [
         ARKitMaterial(
           transparency: 0.5,
-          diffuse: ARKitMaterialProperty.color(
-            AppColors.primary.withValues(alpha: 0.25),
-          ),
+          diffuse: ARKitMaterialProperty.color(color),
         ),
       ],
     );
@@ -180,6 +198,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   void _updatePlaneNode(ARKitPlaneAnchor anchor) {
+    _planeAnchors[anchor.identifier] = anchor;
     final plane = _planes[anchor.identifier];
     if (plane != null) {
       plane.width.value = anchor.extent.x;
@@ -202,7 +221,10 @@ class _ArViewScreenState extends State<ArViewScreen> {
     );
 
     final planeHit = hits.firstWhereOrNull(
-      (hit) => hit.type == ARKitHitTestResultType.existingPlaneUsingExtent,
+      (hit) =>
+          hit.type == ARKitHitTestResultType.existingPlaneUsingExtent &&
+          hit.anchorId != null &&
+          _horizontalPlaneIds.contains(hit.anchorId!),
     );
 
     if (planeHit != null) {
@@ -234,7 +256,40 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
     final position = _reticlePosition!;
 
-    debugPrint('Hit position: $position');
+    // 가장 가까운 벽면(수직면)을 찾아 회전(Rotation) 각도 계산
+    double minDistance = double.infinity;
+    String? closestVerticalId;
+
+    for (final id in _verticalPlaneIds) {
+      final anchor = _planeAnchors[id];
+      if (anchor != null) {
+        final anchorPos = vector.Vector3(
+          anchor.transform.getColumn(3).x,
+          anchor.transform.getColumn(3).y,
+          anchor.transform.getColumn(3).z,
+        );
+        // 바닥 위의 위치와 벽면 앵커 중심점 사이의 거리
+        final distance = anchorPos.distanceTo(position);
+        if (distance < minDistance) {
+          minDistance = distance;
+          closestVerticalId = id;
+        }
+      }
+    }
+
+    vector.Vector3 eulerAngles = vector.Vector3.zero();
+
+    // 2미터 이내에 벽면이 있다면 벽면의 방향(Normal)에 맞춰 회전
+    if (closestVerticalId != null && minDistance < 2.0) {
+      final wallAnchor = _planeAnchors[closestVerticalId]!;
+      // 벽면의 법선 벡터 (월드 기준)
+      final normal = wallAnchor.transform.getColumn(1);
+      // 법선 벡터의 X, Z 성분을 이용해 Y축 기준 회전 각도(Yaw) 계산
+      final angle = math.atan2(normal.x, normal.z);
+      eulerAngles = vector.Vector3(0, angle, 0);
+    }
+
+    debugPrint('Hit position: $position, Wall angle: ${eulerAngles.y}');
 
     try {
       // ARKitGltfNode 사용 — 로컬 파일 경로 전달 (AssetType.documents 사용)
@@ -243,6 +298,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
         url: _localGlbPath!,
         scale: vector.Vector3.all(0.3), // 0.3배 하드코딩으로 복구
         position: position,
+        eulerAngles: eulerAngles, // 계산된 회전 각도 적용
         name: nodeName,
       );
 
@@ -282,7 +338,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
           // ── ARKit 카메라 뷰 ──
           ARKitSceneView(
             configuration: ARKitConfiguration.worldTracking,
-            planeDetection: ARPlaneDetection.horizontal,
+            planeDetection: ARPlaneDetection.horizontalAndVertical,
             enableTapRecognizer: false,
             onARKitViewCreated: _onARKitViewCreated,
           ),
