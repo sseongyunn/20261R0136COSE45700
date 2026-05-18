@@ -37,23 +37,20 @@ HUNYUAN_NUM_INFERENCE_STEPS=40
 HUNYUAN_GUIDANCE_SCALE=5.0
 HUNYUAN_NUM_CHUNKS=8000
 HUNYUAN_FACE_COUNT=1000000
+
+# Per-user generation quota, checked after JWT verification and before enqueue.
+GENERATION_JOBS_PER_HOUR=3
+GENERATION_JOBS_PER_DAY=15
 ```
 
 Do not set `AWS_ACCESS_KEY_ID` or `AWS_SECRET_ACCESS_KEY` on EC2. boto3 uses the EC2 IAM instance profile.
 
 ## Database
 
-Apply the schema once:
+Apply or update the database schema with the single idempotent SQL file:
 
 ```bash
 psql "$DATABASE_URL" -f sql/schema.sql
-```
-
-If the RDS database already has older tables, run the upgrade script once before
-starting the worker:
-
-```bash
-psql "$DATABASE_URL" -f sql/upgrade_existing.sql
 ```
 
 `source_image_id` is the single-image input for VARCO and the front image for
@@ -143,3 +140,51 @@ cleanup/reduction step.
 
 Run the GPU server with systemd or directly on the GPU EC2 so that the backend
 worker can reach `http://172.31.91.251:5173/health` from the backend EC2.
+
+## Local Abuse Testing Without GPU
+
+Use loopback services when the GPU instance is down or you do not want to run
+the model locally:
+
+```bash
+cd ~/furniture-ar-backend/backend
+source venv/bin/activate
+uvicorn app.main:app --host 127.0.0.1 --port 5173
+```
+
+In another shell, run the mock Hunyuan endpoint:
+
+```bash
+cd ~/furniture-ar-backend/backend
+source venv/bin/activate
+uvicorn scripts.mock_hunyuan_server:app --host 127.0.0.1 --port 8088
+```
+
+For single-image jobs, set `MOCK_VARCO=true` before starting the worker so it
+uploads a minimal GLB instead of calling VARCO. For multiview jobs, point the
+worker at the mock GPU server:
+
+```bash
+cd ~/furniture-ar-backend/backend
+source venv/bin/activate
+MOCK_VARCO=true python worker/generation_worker.py
+
+# Or, for multiview Hunyuan-path testing:
+HUNYUAN_BASE_URL=http://127.0.0.1:8088 python worker/generation_worker.py
+```
+
+After obtaining a valid user and source image ID, simulate many authenticated
+job creation requests:
+
+```bash
+python scripts/spam_generation_jobs.py \
+  --base-url http://127.0.0.1:5173 \
+  --email user@example.com \
+  --password '<password>' \
+  --source-image-id '<owned-source-image-uuid>' \
+  --count 10 \
+  --concurrency 10
+```
+
+On a fresh quota window, the first 3 requests should succeed and later requests
+should return HTTP 429 until the hourly window moves.

@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
 
@@ -74,12 +75,62 @@ def _require_owned_source_image(db: Session, source_image_id: str, user_id: str)
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Source image not found")
 
 
+def _enforce_generation_job_quota(db: Session, user_id: str) -> None:
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(457, hashtext(:user_id))"),
+        {"user_id": user_id},
+    )
+    row = db.execute(
+        text(
+            """
+            SELECT
+                COUNT(*) FILTER (
+                    WHERE queued_at >= now() - interval '1 hour'
+                ) AS jobs_last_hour,
+                COUNT(*) AS jobs_last_day
+            FROM generation_jobs
+            WHERE user_id = :user_id
+              AND queued_at >= now() - interval '1 day'
+            """
+        ),
+        {"user_id": user_id},
+    ).mappings().one()
+
+    jobs_last_hour = int(row["jobs_last_hour"] or 0)
+    jobs_last_day = int(row["jobs_last_day"] or 0)
+
+    if (
+        settings.generation_jobs_per_hour > 0
+        and jobs_last_hour >= settings.generation_jobs_per_hour
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Generation quota exceeded: "
+                f"maximum {settings.generation_jobs_per_hour} jobs per hour per user"
+            ),
+        )
+
+    if (
+        settings.generation_jobs_per_day > 0
+        and jobs_last_day >= settings.generation_jobs_per_day
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=(
+                "Generation quota exceeded: "
+                f"maximum {settings.generation_jobs_per_day} jobs per day per user"
+            ),
+        )
+
+
 @router.post("", response_model=CreateGenerationJobResponse)
 def create_generation_job(
     payload: CreateGenerationJobRequest,
     current_user: Annotated[dict, Depends(get_current_user)],
     db: Session = Depends(get_db),
 ) -> CreateGenerationJobResponse:
+    _enforce_generation_job_quota(db, current_user["id"])
     _require_owned_source_image(db, payload.sourceImageId, current_user["id"])
 
     provider = "varco"

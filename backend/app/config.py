@@ -48,6 +48,8 @@ class Settings:
     worker_poll_seconds: int = 5
     varco_poll_seconds: int = 10
     varco_poll_timeout_seconds: int = 3600
+    generation_jobs_per_hour: int = 3
+    generation_jobs_per_day: int = 15
 
 
 def _bool_env(name: str, default: bool = False) -> bool:
@@ -121,6 +123,8 @@ def get_settings() -> Settings:
         worker_poll_seconds=_int_env("WORKER_POLL_SECONDS", 5),
         varco_poll_seconds=_int_env("VARCO_POLL_SECONDS", 10),
         varco_poll_timeout_seconds=_int_env("VARCO_POLL_TIMEOUT_SECONDS", 3600),
+        generation_jobs_per_hour=_int_env("GENERATION_JOBS_PER_HOUR", 3),
+        generation_jobs_per_day=_int_env("GENERATION_JOBS_PER_DAY", 15),
     )
 
 
