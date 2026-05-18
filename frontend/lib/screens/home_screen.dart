@@ -74,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 iconColor: AppColors.primary,
                 iconBg: const Color(0xFF3D2518),
                 title: '사진으로 3D 만들기',
-                subtitle: '사진 업로드 후 VARCO 생성 요청',
+                subtitle: '단일 이미지 또는 멀티뷰 생성 요청',
                 onTap: () => Navigator.push(
                   context,
                   _slide(const UploadScreen()),
