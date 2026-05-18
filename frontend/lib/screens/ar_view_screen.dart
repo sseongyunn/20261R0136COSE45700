@@ -1,6 +1,8 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 
 import 'package:arkit_plugin/arkit_plugin.dart';
 import 'package:collection/collection.dart';
@@ -41,9 +43,6 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
   // 감지된 평면 목록
   final Map<String, ARKitPlane> _planes = {};
-  final Map<String, ARKitPlaneAnchor> _planeAnchors = {};
-  final Set<String> _horizontalPlaneIds = {};
-  final Set<String> _verticalPlaneIds = {};
 
   // 현재 배치된 모델 노드 이름
   String? _placedNodeName;
@@ -59,7 +58,13 @@ class _ArViewScreenState extends State<ArViewScreen> {
   String? _downloadError;
 
   // 평면 감지 여부
-  bool get _planeDetected => _horizontalPlaneIds.isNotEmpty;
+  bool get _planeDetected => _planes.isNotEmpty;
+
+  // 배치된 가구의 현재 Y축 회전 각도 (라디안)
+  double _modelYRotation = 0.0;
+
+  // GLB 좌표계 보정 값 (다운로드 후 진단 결과로 채움)
+  vector.Vector3 _modelBaseRotation = vector.Vector3.zero();
 
   @override
   void initState() {
@@ -99,6 +104,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
           setState(() {
             _localGlbPath = fileName;
           });
+          await _diagnoseGlbCoordinateSystem(file);
           return;
         } else {
           throw Exception('로컬 모델 파일을 찾을 수 없습니다.');
@@ -118,10 +124,97 @@ class _ArViewScreenState extends State<ArViewScreen> {
       setState(() {
         _localGlbPath = fileName;
       });
+      await _diagnoseGlbCoordinateSystem(file);
     } catch (e) {
       if (mounted) setState(() => _downloadError = e.toString());
     } finally {
       if (mounted) setState(() => _downloading = false);
+    }
+  }
+
+  // ────────────────────────────────────────────────
+  //  GLB 좌표계 진단
+  // ────────────────────────────────────────────────
+  Future<void> _diagnoseGlbCoordinateSystem(File file) async {
+    try {
+      final bytes = await file.readAsBytes();
+      final data = ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.length);
+
+      // GLB 헤더 확인
+      if (data.lengthInBytes < 20) return;
+      final magic = data.getUint32(0, Endian.little);
+      if (magic != 0x46546C67) {
+        debugPrint('[GLB진단] 올바른 GLB 파일이 아닙니다.');
+        return;
+      }
+
+      // JSON 청크 파싱
+      final chunk0Length = data.getUint32(12, Endian.little);
+      final chunk0Type  = data.getUint32(16, Endian.little);
+      if (chunk0Type != 0x4E4F534A) {
+        debugPrint('[GLB진단] JSON 청크를 찾지 못했습니다.');
+        return;
+      }
+
+      final jsonBytes  = bytes.sublist(20, 20 + chunk0Length);
+      final gltf = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
+
+      // 에셈츠 정보
+      final asset = gltf['asset'] as Map<String, dynamic>?;
+      debugPrint('[GLB진단] generator : ${asset?['generator']}');
+      debugPrint('[GLB진단] version   : ${asset?['version']}');
+
+      // 루트 노드 변환 확인
+      final scenes = gltf['scenes'] as List<dynamic>?;
+      final nodes  = gltf['nodes']  as List<dynamic>?;
+      final defaultScene = gltf['scene'] as int? ?? 0;
+
+      if (scenes != null && nodes != null && scenes.isNotEmpty) {
+        final rootNodeIndices =
+            (scenes[defaultScene]['nodes'] as List<dynamic>? ?? []).cast<int>();
+
+        for (final idx in rootNodeIndices) {
+          final node = nodes[idx] as Map<String, dynamic>;
+          final name     = node['name'] ?? 'unnamed';
+          final rotation = node['rotation'] as List<dynamic>?;
+          final scale    = node['scale']    as List<dynamic>?;
+          final matrix   = node['matrix']   as List<dynamic>?;
+
+          debugPrint('[GLB진단] 루트노드 "$name"');
+          debugPrint('  rotation : $rotation');
+          debugPrint('  scale    : $scale');
+          debugPrint('  matrix   : $matrix');
+
+          // 탐지: Blender Z-up 보정 진단
+          // quaternion [-0.707, 0, 0, 0.707] ≈ X축 -90° 회전 = Z-up 보정
+          if (rotation != null && rotation.length == 4) {
+            final rx = (rotation[0] as num).toDouble();
+            final ry = (rotation[1] as num).toDouble();
+            final rz = (rotation[2] as num).toDouble();
+            final rw = (rotation[3] as num).toDouble();
+            // X축 회전이면 ry≈0, rz≈0
+            if (ry.abs() < 0.01 && rz.abs() < 0.01) {
+              // X축 회전 각도 계산 (rad)
+              final angle = 2 * math.asin(rx.clamp(-1.0, 1.0)) * (rw < 0 ? -1.0 : 1.0);
+              debugPrint('  ↳ X축 회전 감지: ${(angle * 180 / math.pi).toStringAsFixed(1)}°');
+              if ((angle + math.pi / 2).abs() < 0.1) {
+                debugPrint('  ↳ ⚠️ Blender Z-up 보정(X -90°) 감지 → ARKit에서 eulerAngles.x += pi/2 필요');
+                if (mounted) {
+                  setState(() => _modelBaseRotation = vector.Vector3(math.pi / 2, 0, 0));
+                }
+              } else {
+                debugPrint('  ↳ 기타 X축 회전 감지: ${(angle * 180 / math.pi).toStringAsFixed(1)}°');
+              }
+            } else {
+              debugPrint('  ↳ 비-X축 회전 감지 (Y성분=$ry, Z성분=$rz)');
+            }
+          } else if (rotation == null) {
+            debugPrint('  ↳ ✅ 루트노드 rotation 없음 → Y-up 정상 좌표계');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[GLB진단] 오류: $e');
     }
   }
 
@@ -152,30 +245,15 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   void _addPlaneNode(ARKitPlaneAnchor anchor) {
-    _planeAnchors[anchor.identifier] = anchor;
-
-    // 평면의 월드 기준 법선 벡터(Normal) 추출 (Y축 성분)
-    final normalY = anchor.transform.getColumn(1).y;
-    // 수평면은 법선 벡터가 위(또는 아래)를 향하므로 Y 성분의 절대값이 큽니다.
-    final isHorizontal = normalY.abs() > 0.8;
-
-    if (isHorizontal) {
-      _horizontalPlaneIds.add(anchor.identifier);
-    } else {
-      _verticalPlaneIds.add(anchor.identifier);
-    }
-
-    final color = isHorizontal
-        ? AppColors.primary.withValues(alpha: 0.25)
-        : Colors.blueAccent.withValues(alpha: 0.3); // 벽면은 파란색으로 표시
-
     final plane = ARKitPlane(
       width: anchor.extent.x,
       height: anchor.extent.z,
       materials: [
         ARKitMaterial(
           transparency: 0.5,
-          diffuse: ARKitMaterialProperty.color(color),
+          diffuse: ARKitMaterialProperty.color(
+            AppColors.primary.withValues(alpha: 0.25),
+          ),
         ),
       ],
     );
@@ -198,7 +276,6 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   void _updatePlaneNode(ARKitPlaneAnchor anchor) {
-    _planeAnchors[anchor.identifier] = anchor;
     final plane = _planes[anchor.identifier];
     if (plane != null) {
       plane.width.value = anchor.extent.x;
@@ -221,10 +298,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
     );
 
     final planeHit = hits.firstWhereOrNull(
-      (hit) =>
-          hit.type == ARKitHitTestResultType.existingPlaneUsingExtent &&
-          hit.anchorId != null &&
-          _horizontalPlaneIds.contains(hit.anchorId!),
+      (hit) => hit.type == ARKitHitTestResultType.existingPlaneUsingExtent,
     );
 
     if (planeHit != null) {
@@ -256,40 +330,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
     final position = _reticlePosition!;
 
-    // 가장 가까운 벽면(수직면)을 찾아 회전(Rotation) 각도 계산
-    double minDistance = double.infinity;
-    String? closestVerticalId;
-
-    for (final id in _verticalPlaneIds) {
-      final anchor = _planeAnchors[id];
-      if (anchor != null) {
-        final anchorPos = vector.Vector3(
-          anchor.transform.getColumn(3).x,
-          anchor.transform.getColumn(3).y,
-          anchor.transform.getColumn(3).z,
-        );
-        // 바닥 위의 위치와 벽면 앵커 중심점 사이의 거리
-        final distance = anchorPos.distanceTo(position);
-        if (distance < minDistance) {
-          minDistance = distance;
-          closestVerticalId = id;
-        }
-      }
-    }
-
-    vector.Vector3 eulerAngles = vector.Vector3.zero();
-
-    // 2미터 이내에 벽면이 있다면 벽면의 방향(Normal)에 맞춰 회전
-    if (closestVerticalId != null && minDistance < 2.0) {
-      final wallAnchor = _planeAnchors[closestVerticalId]!;
-      // 벽면의 법선 벡터 (월드 기준)
-      final normal = wallAnchor.transform.getColumn(1);
-      // 법선 벡터의 X, Z 성분을 이용해 Y축 기준 회전 각도(Yaw) 계산
-      final angle = math.atan2(normal.x, normal.z);
-      eulerAngles = vector.Vector3(0, angle, 0);
-    }
-
-    debugPrint('Hit position: $position, Wall angle: ${eulerAngles.y}');
+    debugPrint('Hit position: $position');
 
     try {
       // ARKitGltfNode 사용 — 로컬 파일 경로 전달 (AssetType.documents 사용)
@@ -298,13 +339,16 @@ class _ArViewScreenState extends State<ArViewScreen> {
         url: _localGlbPath!,
         scale: vector.Vector3.all(0.3), // 0.3배 하드코딩으로 복구
         position: position,
-        eulerAngles: eulerAngles, // 계산된 회전 각도 적용
+        eulerAngles: _modelBaseRotation, // 좌표계 보정 적용
         name: nodeName,
       );
 
       _arkitController!.add(gltfModel);
 
-      setState(() => _placedNodeName = nodeName);
+      setState(() {
+        _placedNodeName = nodeName;
+        _modelYRotation = 0.0; // 배치 시 회전 초기화
+      });
     } catch (_) {
       // 실패할 경우 디버그용 빨간 상자로 대체
       final node = ARKitNode(
@@ -327,6 +371,31 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   // ────────────────────────────────────────────────
+  //  회전
+  // ────────────────────────────────────────────────
+  void _rotateModel(double angleDelta) {
+    if (_placedNodeName == null || _arkitController == null) return;
+    _modelYRotation += angleDelta;
+    // SceneKit에서 eulerAngles는 직접 업데이트가 안 되므로
+    // 노드를 제거하고 새 회전 각도로 다시 추가합니다.
+    final position = _reticlePosition!;
+    _arkitController!.remove(_placedNodeName!);
+    final nodeName = _placedNodeName!;
+    try {
+      final gltfModel = ARKitGltfNode(
+        assetType: AssetType.documents,
+        url: _localGlbPath!,
+        scale: vector.Vector3.all(0.3),
+        position: position,
+        eulerAngles: _modelBaseRotation + vector.Vector3(_modelYRotation, 0, 0),
+        name: nodeName,
+      );
+      _arkitController!.add(gltfModel);
+    } catch (_) {}
+    setState(() {});
+  }
+
+  // ────────────────────────────────────────────────
   //  UI
   // ────────────────────────────────────────────────
   @override
@@ -338,7 +407,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
           // ── ARKit 카메라 뷰 ──
           ARKitSceneView(
             configuration: ARKitConfiguration.worldTracking,
-            planeDetection: ARPlaneDetection.horizontalAndVertical,
+            planeDetection: ARPlaneDetection.horizontal,
             enableTapRecognizer: false,
             onARKitViewCreated: _onARKitViewCreated,
           ),
@@ -400,8 +469,19 @@ class _ArViewScreenState extends State<ArViewScreen> {
             if (_placedNodeName != null)
               const _HintBadge(
                 icon: Icons.check_circle_outline_rounded,
-                text: '하단의 제거 버튼을 눌러 다시 배치할 수 있어요',
+                text: '좌우로 드래그해서 회전할 수 있어요',
                 isSuccess: true,
+              ),
+
+            // 배치된 모델이 있을 때 전체 화면 드래그 제스처 오버레이
+            if (_placedNodeName != null)
+              GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onHorizontalDragUpdate: (details) {
+                  // 1px 드래그 = 0.008 rad 회전 (민감도 조절)
+                  _rotateModel(details.delta.dx * 0.008);
+                },
+                child: const SizedBox.expand(),
               ),
 
             // 조준점 (Reticle) 오버레이 위젯
@@ -444,7 +524,10 @@ class _ArViewScreenState extends State<ArViewScreen> {
               onRemove: () {
                 if (_placedNodeName != null) {
                   _arkitController?.remove(_placedNodeName!);
-                  setState(() => _placedNodeName = null);
+                  setState(() {
+                    _placedNodeName = null;
+                    _modelYRotation = 0.0;
+                  });
                 }
               },
             ),
