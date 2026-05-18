@@ -1,0 +1,15 @@
+{
+  "label": "20260517T103328Z_01_octree-384_steps-30_chunks-8000_faces-500000",
+  "success": false,
+  "elapsed_seconds": 217.63268804200925,
+  "output_path": null,
+  "output_bytes": 0,
+  "face_count_actual": null,
+  "error": "ConnectionError(ProtocolError('Connection aborted.', RemoteDisconnected('Remote end closed connection without response')))",
+  "params": {
+    "octree_resolution": 384,
+    "num_inference_steps": 30,
+    "num_chunks": 8000,
+    "face_count": 500000
+  }
+}

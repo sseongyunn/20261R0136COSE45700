@@ -1,0 +1,17 @@
+{
+  "remove_background": true,
+  "texture": true,
+  "file_type": "glb",
+  "type": "glb",
+  "seed": 1234,
+  "guidance_scale": 5.0,
+  "octree_resolution": 384,
+  "num_inference_steps": 40,
+  "num_chunks": 8000,
+  "face_count": 100000,
+  "target_face_num": 100000,
+  "front": "<base64:3579276 chars>",
+  "back": "<base64:3590148 chars>",
+  "left": "<base64:4186016 chars>",
+  "right": "<base64:4006308 chars>"
+}

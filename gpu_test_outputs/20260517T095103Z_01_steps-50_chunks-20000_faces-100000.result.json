@@ -1,0 +1,14 @@
+{
+  "label": "20260517T095103Z_01_steps-50_chunks-20000_faces-100000",
+  "success": true,
+  "elapsed_seconds": 127.84961429203395,
+  "output_path": "gpu_test_outputs/20260517T095103Z_01_steps-50_chunks-20000_faces-100000.glb",
+  "output_bytes": 6163784,
+  "face_count_actual": null,
+  "error": null,
+  "params": {
+    "num_inference_steps": 50,
+    "num_chunks": 20000,
+    "face_count": 100000
+  }
+}

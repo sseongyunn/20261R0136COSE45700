@@ -1,0 +1,17 @@
+[
+  {
+    "label": "20260517T101911Z_01_octree-512_steps-30_chunks-20000_faces-200000",
+    "success": true,
+    "elapsed_seconds": 308.45251591608394,
+    "output_path": "gpu_test_outputs/20260517T101911Z_01_octree-512_steps-30_chunks-20000_faces-200000.glb",
+    "output_bytes": 10091516,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 512,
+      "num_inference_steps": 30,
+      "num_chunks": 20000,
+      "face_count": 200000
+    }
+  }
+]

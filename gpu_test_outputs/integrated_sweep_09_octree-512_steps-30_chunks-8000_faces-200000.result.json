@@ -1,0 +1,15 @@
+{
+  "label": "integrated_sweep_09_octree-512_steps-30_chunks-8000_faces-200000",
+  "success": true,
+  "elapsed_seconds": 233.7957197499927,
+  "output_path": "gpu_test_outputs/integrated_sweep_09_octree-512_steps-30_chunks-8000_faces-200000.glb",
+  "output_bytes": 10091592,
+  "face_count_actual": null,
+  "error": null,
+  "params": {
+    "octree_resolution": 512,
+    "num_inference_steps": 30,
+    "num_chunks": 8000,
+    "face_count": 200000
+  }
+}

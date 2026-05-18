@@ -1,0 +1,182 @@
+[
+  {
+    "label": "integrated_sweep_01_octree-384_steps-30_chunks-8000_faces-100000",
+    "success": true,
+    "elapsed_seconds": 78.58083587500732,
+    "output_path": "gpu_test_outputs/integrated_sweep_01_octree-384_steps-30_chunks-8000_faces-100000.glb",
+    "output_bytes": 6333928,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 384,
+      "num_inference_steps": 30,
+      "num_chunks": 8000,
+      "face_count": 100000
+    }
+  },
+  {
+    "label": "integrated_sweep_02_octree-384_steps-30_chunks-8000_faces-150000",
+    "success": true,
+    "elapsed_seconds": 138.91706962499302,
+    "output_path": "gpu_test_outputs/integrated_sweep_02_octree-384_steps-30_chunks-8000_faces-150000.glb",
+    "output_bytes": 8550352,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 384,
+      "num_inference_steps": 30,
+      "num_chunks": 8000,
+      "face_count": 150000
+    }
+  },
+  {
+    "label": "integrated_sweep_03_octree-384_steps-30_chunks-8000_faces-200000",
+    "success": true,
+    "elapsed_seconds": 157.51249595801346,
+    "output_path": "gpu_test_outputs/integrated_sweep_03_octree-384_steps-30_chunks-8000_faces-200000.glb",
+    "output_bytes": 10287368,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 384,
+      "num_inference_steps": 30,
+      "num_chunks": 8000,
+      "face_count": 200000
+    }
+  },
+  {
+    "label": "integrated_sweep_04_octree-384_steps-40_chunks-8000_faces-100000",
+    "success": true,
+    "elapsed_seconds": 84.36370891705155,
+    "output_path": "gpu_test_outputs/integrated_sweep_04_octree-384_steps-40_chunks-8000_faces-100000.glb",
+    "output_bytes": 6773264,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 384,
+      "num_inference_steps": 40,
+      "num_chunks": 8000,
+      "face_count": 100000
+    }
+  },
+  {
+    "label": "integrated_sweep_05_octree-384_steps-40_chunks-8000_faces-150000",
+    "success": true,
+    "elapsed_seconds": 104.15575383300893,
+    "output_path": "gpu_test_outputs/integrated_sweep_05_octree-384_steps-40_chunks-8000_faces-150000.glb",
+    "output_bytes": 8178556,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 384,
+      "num_inference_steps": 40,
+      "num_chunks": 8000,
+      "face_count": 150000
+    }
+  },
+  {
+    "label": "integrated_sweep_06_octree-384_steps-40_chunks-8000_faces-200000",
+    "success": true,
+    "elapsed_seconds": 155.31531049998011,
+    "output_path": "gpu_test_outputs/integrated_sweep_06_octree-384_steps-40_chunks-8000_faces-200000.glb",
+    "output_bytes": 10033172,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 384,
+      "num_inference_steps": 40,
+      "num_chunks": 8000,
+      "face_count": 200000
+    }
+  },
+  {
+    "label": "integrated_sweep_07_octree-512_steps-30_chunks-8000_faces-100000",
+    "success": true,
+    "elapsed_seconds": 86.10551029199269,
+    "output_path": "gpu_test_outputs/integrated_sweep_07_octree-512_steps-30_chunks-8000_faces-100000.glb",
+    "output_bytes": 6620860,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 512,
+      "num_inference_steps": 30,
+      "num_chunks": 8000,
+      "face_count": 100000
+    }
+  },
+  {
+    "label": "integrated_sweep_08_octree-512_steps-30_chunks-8000_faces-150000",
+    "success": true,
+    "elapsed_seconds": 114.36031220899895,
+    "output_path": "gpu_test_outputs/integrated_sweep_08_octree-512_steps-30_chunks-8000_faces-150000.glb",
+    "output_bytes": 8470880,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 512,
+      "num_inference_steps": 30,
+      "num_chunks": 8000,
+      "face_count": 150000
+    }
+  },
+  {
+    "label": "integrated_sweep_09_octree-512_steps-30_chunks-8000_faces-200000",
+    "success": true,
+    "elapsed_seconds": 233.7957197499927,
+    "output_path": "gpu_test_outputs/integrated_sweep_09_octree-512_steps-30_chunks-8000_faces-200000.glb",
+    "output_bytes": 10091592,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 512,
+      "num_inference_steps": 30,
+      "num_chunks": 8000,
+      "face_count": 200000
+    }
+  },
+  {
+    "label": "integrated_sweep_10_octree-512_steps-40_chunks-8000_faces-100000",
+    "success": true,
+    "elapsed_seconds": 89.31236654194072,
+    "output_path": "gpu_test_outputs/integrated_sweep_10_octree-512_steps-40_chunks-8000_faces-100000.glb",
+    "output_bytes": 6790060,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 512,
+      "num_inference_steps": 40,
+      "num_chunks": 8000,
+      "face_count": 100000
+    }
+  },
+  {
+    "label": "integrated_sweep_11_octree-512_steps-40_chunks-8000_faces-150000",
+    "success": true,
+    "elapsed_seconds": 119.11323100002483,
+    "output_path": "gpu_test_outputs/integrated_sweep_11_octree-512_steps-40_chunks-8000_faces-150000.glb",
+    "output_bytes": 8569440,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 512,
+      "num_inference_steps": 40,
+      "num_chunks": 8000,
+      "face_count": 150000
+    }
+  },
+  {
+    "label": "integrated_sweep_12_octree-512_steps-40_chunks-8000_faces-200000",
+    "success": true,
+    "elapsed_seconds": 161.64431154204067,
+    "output_path": "gpu_test_outputs/integrated_sweep_12_octree-512_steps-40_chunks-8000_faces-200000.glb",
+    "output_bytes": 10073204,
+    "face_count_actual": null,
+    "error": null,
+    "params": {
+      "octree_resolution": 512,
+      "num_inference_steps": 40,
+      "num_chunks": 8000,
+      "face_count": 200000
+    }
+  }
+]
