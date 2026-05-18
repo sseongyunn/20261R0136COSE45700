@@ -66,6 +66,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
   // GLB 좌표계 보정 값 (다운로드 후 진단 결과로 채움)
   vector.Vector3 _modelBaseRotation = vector.Vector3.zero();
 
+  // 드래그 힌트 표시 여부 (쪹 배치 시 1회만)
+  bool _showDragHint = false;
+
   @override
   void initState() {
     super.initState();
@@ -348,6 +351,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       setState(() {
         _placedNodeName = nodeName;
         _modelYRotation = 0.0; // 배치 시 회전 초기화
+        _showDragHint = true;  // 힌트 표시
       });
     } catch (_) {
       // 실패할 경우 디버그용 빨간 상자로 대체
@@ -465,23 +469,19 @@ class _ArViewScreenState extends State<ArViewScreen> {
                 isReady: true,
               ),
 
-            // 배치 완료 안내
+            // (hint badge 제거 - _DragHintOverlay가 대신 안내함)
+            // 선택 링 오버레이 (배치 후)
             if (_placedNodeName != null)
-              const _HintBadge(
-                icon: Icons.check_circle_outline_rounded,
-                text: '좌우로 드래그해서 회전할 수 있어요',
-                isSuccess: true,
-              ),
+              const _SelectionRing(),
 
-            // 배치된 모델이 있을 때 전체 화면 드래그 제스처 오버레이
-            if (_placedNodeName != null)
-              GestureDetector(
-                behavior: HitTestBehavior.translucent,
-                onHorizontalDragUpdate: (details) {
-                  // 1px 드래그 = 0.008 rad 회전 (민감도 조절)
-                  _rotateModel(details.delta.dx * 0.008);
-                },
-                child: const SizedBox.expand(),
+            if (_showDragHint)
+              Positioned(
+                bottom: MediaQuery.of(context).size.width / 2 + 12,
+                left: 0,
+                right: 0,
+                child: _DragHintOverlay(
+                  onDismiss: () => setState(() => _showDragHint = false),
+                ),
               ),
 
             // 조준점 (Reticle) 오버레이 위젯
@@ -520,7 +520,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
             child: _BottomBar(
               hasModel: _placedNodeName != null,
               canPlace: _reticlePosition != null,
+              modelRotationDeg: ((_modelYRotation * 180 / math.pi) % 360 + 360) % 360,
               onPlace: _placeModel,
+              onRotateDrag: (dx) => _rotateModel(-dx * 0.013),
               onRemove: () {
                 if (_placedNodeName != null) {
                   _arkitController?.remove(_placedNodeName!);
@@ -642,21 +644,44 @@ class _TopBar extends StatelessWidget {
 class _BottomBar extends StatelessWidget {
   final bool hasModel;
   final bool canPlace;
+  final double modelRotationDeg;
   final VoidCallback onPlace;
+  final ValueChanged<double> onRotateDrag;
   final VoidCallback onRemove;
 
   const _BottomBar({
     required this.hasModel,
     required this.canPlace,
+    required this.modelRotationDeg,
     required this.onPlace,
+    required this.onRotateDrag,
     required this.onRemove,
   });
 
   @override
   Widget build(BuildContext context) {
+    final bottomPad = MediaQuery.of(context).padding.bottom;
+    if (hasModel) {
+      // 반원 핸들 + 제거 버튼 (full-width, 패딩 없음)
+      return Stack(
+        alignment: Alignment.bottomCenter,
+        children: [
+          _RotationHandle(rotationDeg: modelRotationDeg, onDragDx: onRotateDrag),
+          Positioned(
+            bottom: bottomPad + 12,
+            child: _ControlBtn(
+              icon: Icons.delete_outline_rounded,
+              label: '제거',
+              onTap: onRemove,
+            ),
+          ),
+        ],
+      );
+    }
+    // 배치 전 버튼
     return Container(
       padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).padding.bottom + 20,
+        bottom: bottomPad + 20,
         top: 20,
         left: 24,
         right: 24,
@@ -671,26 +696,13 @@ class _BottomBar extends StatelessWidget {
           ],
         ),
       ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          if (hasModel) ...[
-            _ControlBtn(
-              icon: Icons.delete_outline_rounded,
-              label: '제거',
-              onTap: onRemove,
-            ),
-          ] else ...[
-            _ControlBtn(
-              icon: Icons.add_box_rounded,
-              label: '이 위치에 배치하기',
-              isWide: true,
-              subtle: !canPlace,
-              onTap: canPlace ? onPlace : () {},
-            ),
-          ],
-        ],
-      ),
+      child: Center(child: _ControlBtn(
+        icon: Icons.add_box_rounded,
+        label: '이 위치에 배치하기',
+        isWide: true,
+        subtle: !canPlace,
+        onTap: canPlace ? onPlace : () {},
+      )),
     );
   }
 }
@@ -747,6 +759,274 @@ class _ControlBtn extends StatelessWidget {
     );
   }
 }
+
+/// 반원형 회전 핸들 (화면 전체 폭)
+class _RotationHandle extends StatelessWidget {
+  final double rotationDeg;
+  final ValueChanged<double> onDragDx;
+  const _RotationHandle({required this.rotationDeg, required this.onDragDx});
+
+  @override
+  Widget build(BuildContext context) {
+    final sw = MediaQuery.of(context).size.width;
+    final h = sw / 2;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onHorizontalDragUpdate: (d) => onDragDx(d.delta.dx),
+      child: Container(
+        width: double.infinity,
+        height: h,
+        clipBehavior: Clip.antiAlias,
+        decoration: BoxDecoration(
+          color: Colors.black.withValues(alpha: 0.45),
+          borderRadius: BorderRadius.only(
+            topLeft: Radius.circular(sw / 2),
+            topRight: Radius.circular(sw / 2),
+          ),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.18),
+            width: 1.5,
+          ),
+        ),
+        child: Stack(
+          children: [
+            // 눈금 CustomPainter
+            Positioned.fill(
+              child: CustomPaint(
+                painter: _SemiCircleRulerPainter(rotationDeg: rotationDeg),
+              ),
+            ),
+            // 현재 각도 표시 (semicircle apex 근처)
+            Positioned(
+              top: h * 0.16,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Text(
+                  '${(rotationDeg > 180 ? rotationDeg - 360 : rotationDeg).round()}°',
+                  style: GoogleFonts.nunito(
+                    fontSize: 26,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white.withValues(alpha: 0.92),
+                    letterSpacing: 0.5,
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// 반원 눈금자 Painter
+class _SemiCircleRulerPainter extends CustomPainter {
+  final double rotationDeg;
+  _SemiCircleRulerPainter({required this.rotationDeg});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height; // 원의 중심은 컨테이너 하단 가운데
+    final r = size.width / 2;
+
+    // 눈금 그리기 (알파범위 0° ← 180° 좌→우)
+    for (int deg = 0; deg <= 180; deg += 5) {
+      final alpha = deg * math.pi / 180;
+      // 상단 반원 위 좌표
+      final px = cx - r * math.cos(alpha);
+      final py = cy - r * math.sin(alpha);
+      // 안쪽 방향 (= 중심 방향)
+      final nx = (cx - px) / r;
+      final ny = (cy - py) / r;
+
+      final isMajor = deg % 30 == 0;
+      final isMid   = deg % 10 == 0;
+      final tickLen = isMajor ? 20.0 : isMid ? 12.0 : 6.0;
+      final alpha2  = isMajor ? 0.65  : isMid ? 0.38  : 0.2;
+      final sw2     = isMajor ? 1.8   : 1.0;
+
+      canvas.drawLine(
+        Offset(px, py),
+        Offset(px + nx * tickLen, py + ny * tickLen),
+        Paint()
+          ..color = Colors.white.withValues(alpha: alpha2)
+          ..strokeWidth = sw2
+          ..strokeCap = StrokeCap.round,
+      );
+    }
+
+    // 위치 지시자: 0° = 반원 중앙(꼭대기), ±90° = 좌우 끝
+    final displayDeg = rotationDeg > 180 ? rotationDeg - 360 : rotationDeg;
+    final arcDeg = (90.0 - displayDeg).clamp(0.0, 180.0);
+    final ia = arcDeg * math.pi / 180;
+    final ipx = cx - r * math.cos(ia);
+    final ipy = cy - r * math.sin(ia);
+
+    // Glow
+    canvas.drawCircle(
+      Offset(ipx, ipy), 7,
+      Paint()
+        ..color = AppColors.primary.withValues(alpha: 0.25)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+    );
+    // 지시자 돇
+    canvas.drawCircle(
+      Offset(ipx, ipy), 4.5,
+      Paint()..color = AppColors.primary.withValues(alpha: 0.95),
+    );
+  }
+
+  @override
+  bool shouldRepaint(_SemiCircleRulerPainter old) =>
+      old.rotationDeg != rotationDeg;
+}
+
+
+/// 가구 주변 회전 가이드 링 (펄싱)
+class _SelectionRing extends StatefulWidget {
+  const _SelectionRing();
+  @override
+  State<_SelectionRing> createState() => _SelectionRingState();
+}
+
+class _SelectionRingState extends State<_SelectionRing>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1600))
+      ..repeat(reverse: true);
+    _pulse = Tween<double>(begin: 0.25, end: 0.7)
+        .animate(CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _pulse,
+    builder: (context, _) => Center(
+      child: Transform.translate(
+        offset: const Offset(0, 60),
+        child: CustomPaint(
+          size: const Size(180, 60),
+          painter: _SelectionRingPainter(opacity: _pulse.value),
+        ),
+      ),
+    ),
+  );
+}
+
+class _SelectionRingPainter extends CustomPainter {
+  final double opacity;
+  _SelectionRingPainter({required this.opacity});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = AppColors.primary.withValues(alpha: opacity)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8;
+    canvas.drawOval(
+      Rect.fromCenter(center: Offset(size.width / 2, size.height / 2),
+          width: size.width, height: size.height),
+      paint,
+    );
+    final arrowPaint = Paint()
+      ..color = AppColors.primary.withValues(alpha: opacity * 0.9)
+      ..style = PaintingStyle.fill;
+    final cx = size.width / 2; final cy = size.height / 2;
+    canvas.drawPath(Path()
+      ..moveTo(cx - size.width * 0.38, cy)
+      ..lineTo(cx - size.width * 0.38 + 8, cy - 5)
+      ..lineTo(cx - size.width * 0.38 + 8, cy + 5)
+      ..close(), arrowPaint);
+    canvas.drawPath(Path()
+      ..moveTo(cx + size.width * 0.38, cy)
+      ..lineTo(cx + size.width * 0.38 - 8, cy - 5)
+      ..lineTo(cx + size.width * 0.38 - 8, cy + 5)
+      ..close(), arrowPaint);
+  }
+
+  @override
+  bool shouldRepaint(_SelectionRingPainter old) => old.opacity != opacity;
+}
+
+/// 드래그 힌트 오버레이 (손가락 스와이프 애니메이션 → 자동 사라짐)
+class _DragHintOverlay extends StatefulWidget {
+  final VoidCallback onDismiss;
+  const _DragHintOverlay({required this.onDismiss});
+  @override
+  State<_DragHintOverlay> createState() => _DragHintOverlayState();
+}
+
+class _DragHintOverlayState extends State<_DragHintOverlay>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _slide;
+  late final Animation<double> _fade;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2800));
+    _slide = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween<double>(begin: 0, end: 28).chain(CurveTween(curve: Curves.easeIn)), weight: 1),
+      TweenSequenceItem(tween: Tween<double>(begin: 28, end: -28).chain(CurveTween(curve: Curves.easeInOut)), weight: 2),
+      TweenSequenceItem(tween: Tween<double>(begin: -28, end: 0).chain(CurveTween(curve: Curves.easeOut)), weight: 1),
+    ]).animate(CurvedAnimation(parent: _ctrl, curve: const Interval(0.0, 0.72)));
+    _fade = Tween<double>(begin: 1.0, end: 0.0).animate(
+      CurvedAnimation(parent: _ctrl, curve: const Interval(0.72, 1.0, curve: Curves.easeOut)),
+    );
+    _ctrl.forward().then((_) { if (mounted) widget.onDismiss(); });
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) => AnimatedBuilder(
+    animation: _ctrl,
+    builder: (context, _) => FadeTransition(
+      opacity: _fade,
+      child: Align(
+        alignment: Alignment.center,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 22, vertical: 14),
+          decoration: BoxDecoration(
+            color: Colors.black.withValues(alpha: 0.55),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Transform.translate(
+                offset: Offset(_slide.value, 0),
+                child: const Icon(Icons.swipe_rounded, color: Colors.white, size: 32),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                '← Drag here to rotate →',
+                style: GoogleFonts.nunito(
+                  color: Colors.white, fontSize: 13,
+                  fontWeight: FontWeight.w600, letterSpacing: 0.5,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
 
 class _HintBadge extends StatelessWidget {
   final IconData icon;
