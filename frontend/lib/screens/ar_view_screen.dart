@@ -66,12 +66,40 @@ class _ArViewScreenState extends State<ArViewScreen> {
   // GLB 좌표계 보정 값 (다운로드 후 진단 결과로 채움)
   vector.Vector3 _modelBaseRotation = vector.Vector3.zero();
 
-  // 드래그 힌트 표시 여부 (쪹 배치 시 1회만)
+  // ────────────────────────────────────────────────
+  // 스케일 보정 관련
+  // ────────────────────────────────────────────────
+  double _calculatedScale = 0.3; // 기본값
+  double? _physicalMaxDim; // 파싱된 목표 최대 길이 (m)
+
+  // 드래그 힌트 표시 여부 (첫 배치 시 1회만)
   bool _showDragHint = false;
+
+  void _parsePhysicalDimensions() {
+    final dim = widget.dimensions;
+    if (dim == null || dim.contains('미입력')) return;
+    
+    // 예: "120 × 60 × 75 cm"
+    final regex = RegExp(r'([\d.]+)\s*×\s*([\d.]+)\s*×\s*([\d.]+)\s*cm');
+    final match = regex.firstMatch(dim);
+    if (match != null) {
+      final w = double.tryParse(match.group(1)!) ?? 0;
+      final d = double.tryParse(match.group(2)!) ?? 0;
+      final h = double.tryParse(match.group(3)!) ?? 0;
+      
+      // cm -> m 변환
+      final maxDim = [w, d, h].reduce(math.max) / 100.0;
+      if (maxDim > 0) {
+        _physicalMaxDim = maxDim;
+        debugPrint('[스케일 보정] 파싱된 물리적 최대 길이: $maxDim m');
+      }
+    }
+  }
 
   @override
   void initState() {
     super.initState();
+    _parsePhysicalDimensions();
     _downloadModel();
   }
 
@@ -162,10 +190,53 @@ class _ArViewScreenState extends State<ArViewScreen> {
       final jsonBytes  = bytes.sublist(20, 20 + chunk0Length);
       final gltf = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
 
-      // 에셈츠 정보
+      // 에셋 정보
       final asset = gltf['asset'] as Map<String, dynamic>?;
       debugPrint('[GLB진단] generator : ${asset?['generator']}');
       debugPrint('[GLB진단] version   : ${asset?['version']}');
+
+      // 바운딩 박스(Bounding Box) 스케일 계산
+      final accessors = gltf['accessors'] as List<dynamic>?;
+      final meshes = gltf['meshes'] as List<dynamic>?;
+      double maxModelLength = 0.0;
+
+      if (accessors != null && meshes != null) {
+        for (final mesh in meshes) {
+          final primitives = mesh['primitives'] as List<dynamic>?;
+          if (primitives != null) {
+            for (final prim in primitives) {
+              final attributes = prim['attributes'] as Map<String, dynamic>?;
+              if (attributes != null && attributes.containsKey('POSITION')) {
+                final accIdx = attributes['POSITION'] as int;
+                final accessor = accessors[accIdx] as Map<String, dynamic>;
+                final minArr = accessor['min'] as List<dynamic>?;
+                final maxArr = accessor['max'] as List<dynamic>?;
+                
+                if (minArr != null && maxArr != null && minArr.length >= 3 && maxArr.length >= 3) {
+                  final dx = ((maxArr[0] as num) - (minArr[0] as num)).abs().toDouble();
+                  final dy = ((maxArr[1] as num) - (minArr[1] as num)).abs().toDouble();
+                  final dz = ((maxArr[2] as num) - (minArr[2] as num)).abs().toDouble();
+                  final localMax = [dx, dy, dz].reduce(math.max);
+                  if (localMax > maxModelLength) maxModelLength = localMax;
+                }
+              }
+            }
+          }
+        }
+      }
+
+      if (maxModelLength > 0) {
+        debugPrint('[GLB진단] 3D 모델 원본 최대 길이(Max Dimension): $maxModelLength m');
+        if (_physicalMaxDim != null) {
+          final scale = _physicalMaxDim! / maxModelLength;
+          debugPrint('[GLB진단] 스케일 배율 계산: $_physicalMaxDim / $maxModelLength = $scale');
+          if (mounted) {
+            setState(() => _calculatedScale = scale);
+          }
+        } else {
+          debugPrint('[GLB진단] 실제 치수 정보가 없어 기본 스케일 유지');
+        }
+      }
 
       // 루트 노드 변환 확인
       final scenes = gltf['scenes'] as List<dynamic>?;
@@ -340,7 +411,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       final gltfModel = ARKitGltfNode(
         assetType: AssetType.documents,
         url: _localGlbPath!,
-        scale: vector.Vector3.all(0.3), // 0.3배 하드코딩으로 복구
+        scale: vector.Vector3.all(_calculatedScale), // 계산된 동적 스케일 적용
         position: position,
         eulerAngles: _modelBaseRotation, // 좌표계 보정 적용
         name: nodeName,
@@ -389,7 +460,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       final gltfModel = ARKitGltfNode(
         assetType: AssetType.documents,
         url: _localGlbPath!,
-        scale: vector.Vector3.all(0.3),
+        scale: vector.Vector3.all(_calculatedScale), // 계산된 스케일 유지
         position: position,
         eulerAngles: _modelBaseRotation + vector.Vector3(_modelYRotation, 0, 0),
         name: nodeName,

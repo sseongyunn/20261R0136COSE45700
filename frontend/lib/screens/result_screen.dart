@@ -67,6 +67,7 @@ class _ResultScreenState extends State<ResultScreen> {
         builder: (_) => ArViewScreen(
           modelUrl: url,
           modelName: widget.model.name,
+          dimensions: widget.model.dimensions,
         ),
       ),
     );

@@ -321,6 +321,7 @@ class _AssetCardState extends State<_AssetCard> {
           builder: (_) => ArViewScreen(
             modelUrl: url,
             modelName: widget.asset.displayName,
+            dimensions: widget.asset.dimensions,
           ),
         ),
       );
