@@ -225,21 +225,57 @@ def wait_for_varco_model(provider_request_id: str) -> str:
     raise TimeoutError(f"VARCO request timed out after {settings.varco_poll_timeout_seconds}s")
 
 
-def _download_hunyuan_multiview_images(job: dict) -> dict[str, bytes]:
-    sources = {
+def _download_hunyuan_view_images(job: dict) -> list[dict]:
+    with SessionLocal() as db:
+        rows = db.execute(
+            text(
+                """
+                SELECT
+                    gjsi.source_image_id,
+                    gjsi.view_label,
+                    si.s3_bucket,
+                    si.s3_key
+                FROM generation_job_source_images gjsi
+                JOIN source_images si ON si.id = gjsi.source_image_id
+                WHERE gjsi.generation_job_id = :job_id
+                ORDER BY gjsi.sort_order ASC, gjsi.created_at ASC
+                """
+            ),
+            {"job_id": str(job["id"])},
+        ).mappings().all()
+
+    if rows:
+        view_images = []
+        for row in rows:
+            view_images.append(
+                {
+                    "source_image_id": str(row["source_image_id"]),
+                    "view": row["view_label"],
+                    "image": download_object_bytes(bucket=row["s3_bucket"], key=row["s3_key"]),
+                }
+            )
+        return view_images
+
+    legacy_sources = {
         "front": ("source_s3_bucket", "source_s3_key"),
         "back": ("back_s3_bucket", "back_s3_key"),
         "left": ("left_s3_bucket", "left_s3_key"),
         "right": ("right_s3_bucket", "right_s3_key"),
     }
-    images: dict[str, bytes] = {}
-    for view, (bucket_key, object_key) in sources.items():
+    view_images = []
+    for view, (bucket_key, object_key) in legacy_sources.items():
         bucket = job.get(bucket_key)
         key = job.get(object_key)
         if not bucket or not key:
             raise RuntimeError(f"Missing {view} source image for Hunyuan multiview job")
-        images[view] = download_object_bytes(bucket=bucket, key=key)
-    return images
+        view_images.append(
+            {
+                "source_image_id": str(job.get(f"source_{view}_image_id") or job["source_image_id"]),
+                "view": view,
+                "image": download_object_bytes(bucket=bucket, key=key),
+            }
+        )
+    return view_images
 
 
 def process_job(job: dict) -> None:
@@ -262,8 +298,8 @@ def process_job(job: dict) -> None:
         provider_request_id = f"hunyuan-{job_id}"
         update_provider_request_id(job_id, provider_request_id)
         update_job_status(job_id, "submitted")
-        images = _download_hunyuan_multiview_images(job)
-        model_bytes = hunyuan_service.generate_multiview_model(images)
+        view_images = _download_hunyuan_view_images(job)
+        model_bytes = hunyuan_service.generate_multiview_model(view_images)
         update_job_status(job_id, "processing")
     else:
         source_image_bytes = download_object_bytes(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import base64
-from typing import Dict
+from typing import Sequence
 
 import requests
 
@@ -12,22 +12,39 @@ def _base64_image(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 
-def generate_multiview_model(images: Dict[str, bytes]) -> bytes:
-    """Generate a GLB from front/back/left/right images using Hunyuan3D-2mv.
+CANONICAL_VIEWS = ("front", "back", "left", "right")
 
-    The current GPU server (`gpu_server/Hunyuan3D-2/api_server.py`) accepts a
-    JSON body with base64 values under `front`, `back`, `left`, and `right`, and
-    returns the generated model file directly from `POST /generate`.
+
+def generate_multiview_model(view_images: Sequence[dict]) -> bytes:
+    """Generate a GLB from multiview images using Hunyuan3D-2mv.
+
+    The GPU server accepts a `views` list so we can pass all uploaded images.
+    Internally, the current Hunyuan3D-2mv model still normalizes them to the
+    canonical front/back/left/right conditioning set it was trained to consume.
     """
-    missing = [view for view in ("front", "back", "left", "right") if not images.get(view)]
+    canonical_images = {
+        item.get("view"): item.get("image")
+        for item in view_images
+        if item.get("view") in CANONICAL_VIEWS and item.get("image")
+    }
+    missing = [view for view in CANONICAL_VIEWS if not canonical_images.get(view)]
     if missing:
         raise RuntimeError(f"Hunyuan multiview generation requires: {', '.join(missing)}")
 
     payload = {
-        "front": _base64_image(images["front"]),
-        "back": _base64_image(images["back"]),
-        "left": _base64_image(images["left"]),
-        "right": _base64_image(images["right"]),
+        "views": [
+            {
+                "view": str(item.get("view") or "unknown"),
+                "image": _base64_image(item["image"]),
+                "source_image_id": str(item.get("source_image_id") or ""),
+            }
+            for item in view_images
+            if item.get("image")
+        ],
+        "front": _base64_image(canonical_images["front"]),
+        "back": _base64_image(canonical_images["back"]),
+        "left": _base64_image(canonical_images["left"]),
+        "right": _base64_image(canonical_images["right"]),
         "remove_background": settings.hunyuan_remove_background,
         "texture": settings.hunyuan_texture,
         "file_type": "glb",

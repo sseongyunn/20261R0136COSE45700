@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Literal, Optional
+from typing import Annotated, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -15,6 +15,24 @@ from app.deps import get_current_user
 
 router = APIRouter(prefix="/generation-jobs", tags=["generation-jobs"])
 
+CANONICAL_VIEWS = {"front", "back", "left", "right"}
+SUPPORTED_VIEW_LABELS = CANONICAL_VIEWS | {
+    "front_left",
+    "front_right",
+    "back_left",
+    "back_right",
+    "top",
+    "bottom",
+    "detail",
+    "extra",
+    "unknown",
+}
+
+
+class GenerationJobSourceImageRequest(BaseModel):
+    sourceImageId: str
+    view: str = Field(default="unknown", max_length=50)
+
 
 class CreateGenerationJobRequest(BaseModel):
     sourceImageId: str
@@ -22,6 +40,7 @@ class CreateGenerationJobRequest(BaseModel):
     backSourceImageId: Optional[str] = None
     leftSourceImageId: Optional[str] = None
     rightSourceImageId: Optional[str] = None
+    viewImages: Optional[List[GenerationJobSourceImageRequest]] = None
     name: Optional[str] = Field(default=None, max_length=200)
     category: Optional[str] = Field(default=None, max_length=100)
     widthCm: Optional[float] = Field(default=None, gt=0)
@@ -58,6 +77,22 @@ def _numeric(value: Optional[float]) -> Optional[float]:
     if value is None:
         return None
     return float(value)
+
+
+def _normalize_view_label(value: Optional[str]) -> str:
+    view = (value or "unknown").strip().lower().replace("-", "_")
+    if view not in SUPPORTED_VIEW_LABELS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported view label: {value}",
+        )
+    return view
+
+
+def _canonical_view_for_label(view_label: str) -> Optional[str]:
+    if view_label in CANONICAL_VIEWS:
+        return view_label
+    return None
 
 
 def _require_owned_source_image(db: Session, source_image_id: str, user_id: str) -> None:
@@ -124,6 +159,79 @@ def _enforce_generation_job_quota(db: Session, user_id: str) -> None:
         )
 
 
+def _build_multiview_sources(payload: CreateGenerationJobRequest) -> list[dict]:
+    if payload.viewImages:
+        sources = [
+            {
+                "source_image_id": image.sourceImageId,
+                "view_label": _normalize_view_label(image.view),
+                "is_primary": False,
+            }
+            for image in payload.viewImages
+        ]
+        if not any(item["source_image_id"] == payload.sourceImageId for item in sources):
+            sources.insert(
+                0,
+                {
+                    "source_image_id": payload.sourceImageId,
+                    "view_label": "front",
+                    "is_primary": True,
+                },
+            )
+        else:
+            for item in sources:
+                if item["source_image_id"] == payload.sourceImageId:
+                    item["is_primary"] = True
+                    break
+    else:
+        legacy_sources = {
+            "front": payload.sourceImageId,
+            "back": payload.backSourceImageId,
+            "left": payload.leftSourceImageId,
+            "right": payload.rightSourceImageId,
+        }
+        missing = [view for view, source_image_id in legacy_sources.items() if not source_image_id]
+        if missing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Missing multiview source images: {', '.join(missing)}",
+            )
+        sources = [
+            {
+                "source_image_id": source_image_id,
+                "view_label": view,
+                "is_primary": view == "front",
+            }
+            for view, source_image_id in legacy_sources.items()
+            if source_image_id
+        ]
+
+    canonical_views = {
+        canonical_view
+        for canonical_view in (_canonical_view_for_label(item["view_label"]) for item in sources)
+        if canonical_view
+    }
+    missing_canonical_views = sorted(CANONICAL_VIEWS - canonical_views)
+    if missing_canonical_views:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "Hunyuan multiview generation requires canonical views: "
+                f"{', '.join(missing_canonical_views)}"
+            ),
+        )
+
+    seen = set()
+    unique_sources = []
+    for item in sources:
+        key = (item["source_image_id"], item["view_label"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_sources.append(item)
+    return unique_sources
+
+
 @router.post("", response_model=CreateGenerationJobResponse)
 def create_generation_job(
     payload: CreateGenerationJobRequest,
@@ -137,27 +245,24 @@ def create_generation_job(
     back_source_image_id = None
     left_source_image_id = None
     right_source_image_id = None
+    multiview_sources: list[dict] = []
 
     if payload.generationMode == "multiview":
-        required_views = {
-            "backSourceImageId": payload.backSourceImageId,
-            "leftSourceImageId": payload.leftSourceImageId,
-            "rightSourceImageId": payload.rightSourceImageId,
+        multiview_sources = _build_multiview_sources(payload)
+        source_by_view = {
+            item["view_label"]: item["source_image_id"]
+            for item in multiview_sources
+            if item["view_label"] in CANONICAL_VIEWS
         }
-        missing = [name for name, value in required_views.items() if not value]
-        if missing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Missing multiview source images: {', '.join(missing)}",
-            )
         back_source_image_id = payload.backSourceImageId
         left_source_image_id = payload.leftSourceImageId
         right_source_image_id = payload.rightSourceImageId
-        for source_image_id in (
-            back_source_image_id,
-            left_source_image_id,
-            right_source_image_id,
-        ):
+        if payload.viewImages:
+            back_source_image_id = source_by_view.get("back")
+            left_source_image_id = source_by_view.get("left")
+            right_source_image_id = source_by_view.get("right")
+
+        for source_image_id in {item["source_image_id"] for item in multiview_sources}:
             _require_owned_source_image(db, source_image_id, current_user["id"])
         provider = "hunyuan"
 
@@ -212,6 +317,38 @@ def create_generation_job(
             "depth_cm": _numeric(payload.depthCm),
         },
     ).mappings().one()
+
+    if multiview_sources:
+        for sort_order, item in enumerate(multiview_sources):
+            db.execute(
+                text(
+                    """
+                    INSERT INTO generation_job_source_images (
+                        generation_job_id,
+                        source_image_id,
+                        view_label,
+                        sort_order,
+                        is_primary
+                    )
+                    VALUES (
+                        :job_id,
+                        :source_image_id,
+                        :view_label,
+                        :sort_order,
+                        :is_primary
+                    )
+                    ON CONFLICT (generation_job_id, source_image_id, view_label)
+                    DO NOTHING
+                    """
+                ),
+                {
+                    "job_id": str(row["id"]),
+                    "source_image_id": item["source_image_id"],
+                    "view_label": item["view_label"],
+                    "sort_order": sort_order,
+                    "is_primary": item["is_primary"],
+                },
+            )
     db.commit()
 
     return CreateGenerationJobResponse(jobId=str(row["id"]), status=row["status"])

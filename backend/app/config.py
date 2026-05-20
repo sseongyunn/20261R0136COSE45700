@@ -22,6 +22,8 @@ class Settings:
     aws_region: str
     s3_bucket: str
     jwt_secret: str
+    cors_allow_origins: list[str]
+    cors_allow_credentials: bool
     varco_api_key: Optional[str]
     varco_api_key_header: str
     varco_submit_url: str
@@ -73,6 +75,12 @@ def _float_env(name: str, default: float) -> float:
     return float(value)
 
 
+def _list_env(name: str, default: str) -> list[str]:
+    value = os.getenv(name, default)
+    items = [item.strip() for item in value.split(",") if item.strip()]
+    return items or [default]
+
+
 def get_settings() -> Settings:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -91,6 +99,8 @@ def get_settings() -> Settings:
         aws_region=os.getenv("AWS_REGION", "us-east-1"),
         s3_bucket=s3_bucket,
         jwt_secret=jwt_secret,
+        cors_allow_origins=_list_env("CORS_ALLOW_ORIGINS", "*"),
+        cors_allow_credentials=_bool_env("CORS_ALLOW_CREDENTIALS", default=False),
         varco_api_key=os.getenv("VARCO_API_KEY") or os.getenv("OPENAPI_KEY"),
         varco_api_key_header=os.getenv("VARCO_API_KEY_HEADER", "OPENAPI_KEY"),
         varco_submit_url=os.getenv(

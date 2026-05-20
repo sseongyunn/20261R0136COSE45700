@@ -40,6 +40,9 @@ server_error_msg = "**NETWORK ERROR DUE TO HIGH TRAFFIC. PLEASE REGENERATE OR RE
 handler = None
 worker_id = str(uuid.uuid4())[:6]
 model_semaphore = None
+model_state_lock = threading.Lock()
+active_model_requests = 0
+waiting_model_requests = 0
 args = None
 
 
@@ -118,6 +121,19 @@ def load_image_from_base64(image_b64: str) -> Image.Image:
     return Image.open(BytesIO(base64.b64decode(image_b64))).convert("RGBA")
 
 
+CANONICAL_VIEWS = ("front", "back", "left", "right")
+VIEW_ALIASES = {
+    "front_left": ("front", "left"),
+    "front_right": ("front", "right"),
+    "back_left": ("back", "left"),
+    "back_right": ("back", "right"),
+}
+
+
+def normalize_view_label(value: str) -> str:
+    return str(value or "unknown").strip().lower().replace("-", "_")
+
+
 class ModelWorker:
     def __init__(
         self,
@@ -155,14 +171,8 @@ class ModelWorker:
         logger.info("ModelWorker ready.")
 
     def get_queue_length(self):
-        if model_semaphore is None:
-            return 0
-
-        waiters = 0
-        if model_semaphore._waiters is not None:
-            waiters = len(model_semaphore._waiters)
-
-        return args.limit_model_concurrency - model_semaphore._value + waiters
+        with model_state_lock:
+            return active_model_requests + waiting_model_requests
 
     def get_status(self):
         return {
@@ -172,6 +182,66 @@ class ModelWorker:
 
     def _prepare_image_input(self, params: Dict[str, Any]):
         remove_background = params.get("remove_background", True)
+
+        # General multiview input. We accept all uploaded images as candidates,
+        # then collapse them into the canonical four views Hunyuan3D-2mv expects.
+        if "views" in params and params.get("views"):
+            candidates = {view: [] for view in CANONICAL_VIEWS}
+            unsupported_views = []
+
+            for idx, item in enumerate(params["views"]):
+                view_label = normalize_view_label(item.get("view", "unknown"))
+                image_b64 = item.get("image")
+                if not image_b64:
+                    continue
+
+                img = load_image_from_base64(image_b64)
+                if remove_background:
+                    img = self.rembg(img)
+
+                candidate = {
+                    "image": img,
+                    "is_exact": view_label in CANONICAL_VIEWS,
+                    "order": idx,
+                    "view_label": view_label,
+                }
+
+                if view_label in CANONICAL_VIEWS:
+                    candidates[view_label].append(candidate)
+                elif view_label in VIEW_ALIASES:
+                    for canonical_view in VIEW_ALIASES[view_label]:
+                        candidates[canonical_view].append(candidate)
+                else:
+                    unsupported_views.append(view_label)
+
+            image_dict = {}
+            for view in CANONICAL_VIEWS:
+                view_candidates = sorted(
+                    candidates[view],
+                    key=lambda candidate: (not candidate["is_exact"], candidate["order"]),
+                )
+                if view_candidates:
+                    image_dict[view] = view_candidates[0]["image"]
+
+            missing = [view for view in CANONICAL_VIEWS if view not in image_dict]
+            if missing:
+                raise ValueError(
+                    "Hunyuan multiview generation requires canonical views: "
+                    f"{', '.join(missing)}"
+                )
+
+            if unsupported_views:
+                logger.info(
+                    "Ignoring unsupported auxiliary view labels for shape generation: %s",
+                    sorted(set(unsupported_views)),
+                )
+
+            params.pop("views", None)
+            for view in CANONICAL_VIEWS:
+                params.pop(view, None)
+
+            params["image"] = image_dict
+            return image_dict
 
         # Single-image input
         if "image" in params and params.get("image"):
@@ -282,12 +352,41 @@ class ModelWorker:
         return save_path, uid
 
 
+def generate_with_model_gate(uid, params):
+    global active_model_requests, waiting_model_requests
+
+    if model_semaphore is None:
+        return worker.generate(uid, params)
+
+    with model_state_lock:
+        waiting_model_requests += 1
+
+    model_semaphore.acquire()
+    try:
+        with model_state_lock:
+            waiting_model_requests -= 1
+            active_model_requests += 1
+
+        return worker.generate(uid, params)
+    finally:
+        with model_state_lock:
+            active_model_requests -= 1
+        model_semaphore.release()
+
+
+def get_cors_allow_origins():
+    value = os.getenv("CORS_ALLOW_ORIGINS", "*")
+    origins = [origin.strip() for origin in value.split(",") if origin.strip()]
+    return origins or ["*"]
+
+
 app = FastAPI(title="Hunyuan3D-2mv API")
 
+cors_allow_origins = get_cors_allow_origins()
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # testing only
-    allow_credentials=True,
+    allow_origins=cors_allow_origins,
+    allow_credentials="*" not in cors_allow_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -305,7 +404,8 @@ async def generate(request: Request):
     uid = uuid.uuid4()
 
     try:
-        file_path, uid = worker.generate(uid, params)
+        loop = asyncio.get_running_loop()
+        file_path, uid = await loop.run_in_executor(None, generate_with_model_gate, uid, params)
         return FileResponse(file_path)
 
     except ValueError as e:
@@ -365,7 +465,7 @@ async def send(request: Request):
     params = await request.json()
     uid = uuid.uuid4()
 
-    threading.Thread(target=worker.generate, args=(uid, params), daemon=True).start()
+    threading.Thread(target=generate_with_model_gate, args=(uid, params), daemon=True).start()
 
     return JSONResponse({"uid": str(uid)}, status_code=200)
 
@@ -407,7 +507,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
-    model_semaphore = asyncio.Semaphore(args.limit_model_concurrency)
+    model_semaphore = threading.BoundedSemaphore(args.limit_model_concurrency)
 
     worker = ModelWorker(
         model_path=args.model_path,

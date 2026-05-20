@@ -8,7 +8,7 @@ cd /home/ubuntu/furniture-ar-backend/gpu_server/Hunyuan3D-2
 
 exec python api_server.py \
   --host 0.0.0.0 \
-  --port 8080 \
+  --port 5173 \
   --model_path tencent/Hunyuan3D-2mv \
   --subfolder hunyuan3d-dit-v2-mv \
   --tex_model_path tencent/Hunyuan3D-2 \

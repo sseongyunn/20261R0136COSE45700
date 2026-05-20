@@ -4,6 +4,7 @@ from functools import lru_cache
 from typing import Optional
 
 import boto3
+from botocore.exceptions import ClientError
 
 from app.config import settings
 
@@ -61,3 +62,13 @@ def upload_model_bytes(bucket: str, key: str, data: bytes) -> None:
 def download_object_bytes(bucket: str, key: str) -> bytes:
     response = s3_client().get_object(Bucket=bucket, Key=key)
     return response["Body"].read()
+
+
+def head_object_metadata(bucket: str, key: str) -> dict:
+    try:
+        return s3_client().head_object(Bucket=bucket, Key=key)
+    except ClientError as exc:
+        error_code = exc.response.get("Error", {}).get("Code")
+        if error_code in {"404", "NoSuchKey", "NotFound"}:
+            raise FileNotFoundError(f"S3 object not found: s3://{bucket}/{key}") from exc
+        raise

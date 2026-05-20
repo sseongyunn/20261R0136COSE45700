@@ -60,6 +60,17 @@ CREATE TABLE IF NOT EXISTS generation_jobs (
   CHECK (requested_depth_cm IS NULL OR requested_depth_cm > 0)
 );
 
+CREATE TABLE IF NOT EXISTS generation_job_source_images (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  generation_job_id UUID NOT NULL REFERENCES generation_jobs(id) ON DELETE CASCADE,
+  source_image_id UUID NOT NULL REFERENCES source_images(id) ON DELETE CASCADE,
+  view_label TEXT NOT NULL,
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  is_primary BOOLEAN NOT NULL DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT now(),
+  UNIQUE(generation_job_id, source_image_id, view_label)
+);
+
 CREATE TABLE IF NOT EXISTS furniture_assets (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -249,6 +260,12 @@ ON generation_jobs(status, queued_at);
 
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_provider_status
 ON generation_jobs(provider, status);
+
+CREATE INDEX IF NOT EXISTS idx_generation_job_source_images_job_order
+ON generation_job_source_images(generation_job_id, sort_order);
+
+CREATE INDEX IF NOT EXISTS idx_generation_job_source_images_source_image
+ON generation_job_source_images(source_image_id);
 
 CREATE INDEX IF NOT EXISTS idx_furniture_assets_user_created 
 ON furniture_assets(user_id, created_at DESC);
