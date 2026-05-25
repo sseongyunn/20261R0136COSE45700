@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../api_client.dart';
 import '../providers/pending_jobs_provider.dart';
 import '../theme/app_theme.dart';
+import 'ar_view_screen.dart';
 import 'gallery_screen.dart';
 import 'upload_screen.dart';
 
@@ -93,6 +94,19 @@ class _HomeScreenState extends State<HomeScreen> {
                 onTap: () => Navigator.push(
                   context,
                   _slide(const GalleryScreen()),
+                ).then((_) => _loadAssetCount()),
+              ),
+              const Gap(12),
+              _ActionCard(
+                icon: Icons.view_in_ar_outlined,
+                iconColor: AppColors.primaryLight,
+                iconBg: const Color(0xFF34291E),
+                title: 'AR 공간 배치',
+                subtitle: '내 모델을 한 공간에 여러 개 배치',
+                badge: _assetCount > 0 ? 'AR' : null,
+                onTap: () => Navigator.push(
+                  context,
+                  _slide(const ArViewScreen()),
                 ).then((_) => _loadAssetCount()),
               ),
               const Spacer(flex: 2),
