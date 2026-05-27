@@ -72,12 +72,6 @@ class _ArViewScreenState extends State<ArViewScreen> {
     return _placedModels[nodeName];
   }
 
-  double get _selectedYawDegrees {
-    final selected = _selectedModel;
-    if (selected == null) return 0;
-    return ((selected.zRotationRadians * 180 / math.pi) % 360 + 360) % 360;
-  }
-
   @override
   void initState() {
     super.initState();
@@ -209,6 +203,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
           previewInvalidGlbPath: previewInvalidFileName,
           scale: calibration.scale,
           baseRotation: calibration.baseRotation,
+          bounds: calibration.bounds,
           previewSize: _previewSizeFromDimensions(asset.dimensions),
         );
       });
@@ -311,6 +306,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
   ) async {
     var scale = 0.3;
     var baseRotation = vector.Vector3.zero();
+    _ModelBounds? bounds;
     final physicalMaxDim = _parsePhysicalMaxDimension(dimensions);
 
     try {
@@ -321,18 +317,30 @@ class _ArViewScreenState extends State<ArViewScreen> {
         bytes.length,
       );
       if (data.lengthInBytes < 20) {
-        return _ModelCalibration(scale: scale, baseRotation: baseRotation);
+        return _ModelCalibration(
+          scale: scale,
+          baseRotation: baseRotation,
+          bounds: bounds,
+        );
       }
 
       final magic = data.getUint32(0, Endian.little);
       if (magic != 0x46546C67) {
-        return _ModelCalibration(scale: scale, baseRotation: baseRotation);
+        return _ModelCalibration(
+          scale: scale,
+          baseRotation: baseRotation,
+          bounds: bounds,
+        );
       }
 
       final chunk0Length = data.getUint32(12, Endian.little);
       final chunk0Type = data.getUint32(16, Endian.little);
       if (chunk0Type != 0x4E4F534A) {
-        return _ModelCalibration(scale: scale, baseRotation: baseRotation);
+        return _ModelCalibration(
+          scale: scale,
+          baseRotation: baseRotation,
+          bounds: bounds,
+        );
       }
 
       final jsonBytes = bytes.sublist(20, 20 + chunk0Length);
@@ -341,6 +349,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
       final accessors = gltf['accessors'] as List<dynamic>?;
       final meshes = gltf['meshes'] as List<dynamic>?;
       var maxModelLength = 0.0;
+      vector.Vector3? boundsMin;
+      vector.Vector3? boundsMax;
 
       if (accessors != null && meshes != null) {
         for (final mesh in meshes) {
@@ -374,12 +384,40 @@ class _ArViewScreenState extends State<ArViewScreen> {
             final dz = ((maxArr[2] as num) - (minArr[2] as num))
                 .abs()
                 .toDouble();
+            final localMin = vector.Vector3(
+              (minArr[0] as num).toDouble(),
+              (minArr[1] as num).toDouble(),
+              (minArr[2] as num).toDouble(),
+            );
+            final localMax = vector.Vector3(
+              (maxArr[0] as num).toDouble(),
+              (maxArr[1] as num).toDouble(),
+              (maxArr[2] as num).toDouble(),
+            );
+            boundsMin = boundsMin == null
+                ? localMin
+                : vector.Vector3(
+                    math.min(boundsMin.x, localMin.x),
+                    math.min(boundsMin.y, localMin.y),
+                    math.min(boundsMin.z, localMin.z),
+                  );
+            boundsMax = boundsMax == null
+                ? localMax
+                : vector.Vector3(
+                    math.max(boundsMax.x, localMax.x),
+                    math.max(boundsMax.y, localMax.y),
+                    math.max(boundsMax.z, localMax.z),
+                  );
             maxModelLength = math.max(
               maxModelLength,
               [dx, dy, dz].reduce(math.max),
             );
           }
         }
+      }
+
+      if (boundsMin != null && boundsMax != null) {
+        bounds = _ModelBounds(min: boundsMin, max: boundsMax);
       }
 
       if (physicalMaxDim != null && maxModelLength > 0) {
@@ -420,7 +458,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
       debugPrint('[AR] GLB inspection skipped: $e');
     }
 
-    return _ModelCalibration(scale: scale, baseRotation: baseRotation);
+    return _ModelCalibration(
+      scale: scale,
+      baseRotation: baseRotation,
+      bounds: bounds,
+    );
   }
 
   double? _parsePhysicalMaxDimension(String? dimensions) {
@@ -528,7 +570,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       return;
     }
 
-    model.position = hit;
+    _setModelGroundPosition(model, hit);
     await _syncPlacedModelTransform(model);
   }
 
@@ -710,9 +752,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
       localGlbPath: prepared.localGlbPath,
       scale: prepared.scale,
       baseRotation: prepared.baseRotation,
+      bounds: prepared.bounds,
       previewSize: prepared.previewSize,
-      position: position,
+      groundPosition: position,
     );
+    _setModelGroundPosition(model, position);
 
     await _addPlacedModel(model);
     if (!mounted) return;
@@ -722,6 +766,38 @@ class _ArViewScreenState extends State<ArViewScreen> {
       _showDragHint = true;
       _statusMessage = '${active.name} 배치됨';
     });
+  }
+
+  void _setModelGroundPosition(_PlacedModel model, vector.Vector3 ground) {
+    model.groundPosition = ground;
+    model.position =
+        ground + vector.Vector3(0, _verticalLiftForModel(model), 0);
+  }
+
+  double _verticalLiftForModel(_PlacedModel model) {
+    final bounds = model.bounds ?? _fallbackBounds(model.previewSize);
+    final orientation = _orientationMatrixForModel(model);
+
+    var minY = double.infinity;
+    for (final corner in bounds.corners) {
+      final scaledCorner = vector.Vector3(
+        corner.x * model.scale,
+        corner.y * model.scale,
+        corner.z * model.scale,
+      );
+      final transformed = orientation.transform3(scaledCorner);
+      minY = math.min(minY, transformed.y);
+    }
+
+    if (!minY.isFinite) return 0;
+    return math.max(0, -minY);
+  }
+
+  _ModelBounds _fallbackBounds(_PreviewSize size) {
+    return _ModelBounds(
+      min: vector.Vector3(-size.width / 2, 0, -size.depth / 2),
+      max: vector.Vector3(size.width / 2, size.height, size.depth / 2),
+    );
   }
 
   Future<void> _addPlacedModel(_PlacedModel model) async {
@@ -759,14 +835,32 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   ARKitGltfNode _gltfNodeFor(_PlacedModel model) {
-    return ARKitGltfNode(
+    final node = ARKitGltfNode(
       assetType: AssetType.documents,
       url: model.localGlbPath,
-      scale: vector.Vector3.all(model.scale),
-      position: model.position,
-      eulerAngles: model.eulerAngles,
       name: model.nodeName,
     );
+    node.transform = _transformForModel(model);
+    return node;
+  }
+
+  vector.Matrix4 _transformForModel(_PlacedModel model) {
+    return _orientationMatrixForModel(model)
+      ..scaleByVector3(vector.Vector3.all(model.scale))
+      ..setTranslation(model.position);
+  }
+
+  vector.Matrix4 _orientationMatrixForModel(_PlacedModel model) {
+    return model.userRotation.multiplied(
+      _baseRotationMatrix(model.baseRotation),
+    );
+  }
+
+  vector.Matrix4 _baseRotationMatrix(vector.Vector3 eulerAngles) {
+    return vector.Matrix4.identity()
+      ..rotateX(eulerAngles.x)
+      ..rotateY(eulerAngles.y)
+      ..rotateZ(eulerAngles.z);
   }
 
   Future<void> _syncPlacedModelTransform(_PlacedModel model) async {
@@ -781,27 +875,54 @@ class _ArViewScreenState extends State<ArViewScreen> {
     if (mounted) setState(() {});
   }
 
-  Future<void> _rotateSelected(double angleDelta) async {
+  Future<void> _rotateSelectedFromWheel(Offset delta) async {
     final selected = _selectedModel;
     if (selected == null) return;
-    selected.zRotationRadians += angleDelta;
+
+    final yawRadians = -delta.dx * 0.013;
+    final tiltRadians = -delta.dy * 0.013;
+    if (yawRadians != 0) {
+      final yawRotation = vector.Matrix4.identity()
+        ..rotate(vector.Vector3(0, 1, 0), yawRadians);
+      selected.userRotation = yawRotation.multiplied(selected.userRotation);
+    }
+    if (tiltRadians != 0) {
+      final tiltAxis = await _cameraObjectTiltAxis(selected);
+      final tiltRotation = vector.Matrix4.identity()
+        ..rotate(tiltAxis, tiltRadians);
+      selected.userRotation = tiltRotation.multiplied(selected.userRotation);
+    }
+
+    _setModelGroundPosition(selected, selected.groundPosition);
     await _syncPlacedModelTransform(selected);
   }
 
-  Future<void> _rotateSelectedXQuarter() async {
-    final selected = _selectedModel;
-    if (selected == null) return;
-    selected.xQuarterTurns = (selected.xQuarterTurns + 1) % 4;
-    await _syncPlacedModelTransform(selected);
-    _showPlacementMessage('X축을 90도 회전했어요.');
+  Future<vector.Vector3> _cameraObjectTiltAxis(_PlacedModel model) async {
+    const minAxisLength = 0.0001;
+    final cameraTransform = await _arkitController?.pointOfViewTransform();
+    if (cameraTransform == null) return vector.Vector3(1, 0, 0);
+
+    final cameraPosition = cameraTransform.getTranslation();
+    final cameraToObject = model.groundPosition - cameraPosition;
+    if (cameraToObject.length2 < minAxisLength) {
+      return _cameraRightAxis(cameraTransform);
+    }
+
+    cameraToObject.normalize();
+    final axis = cameraToObject.cross(vector.Vector3(0, 1, 0));
+    if (axis.length2 < minAxisLength) {
+      return _cameraRightAxis(cameraTransform);
+    }
+    axis.normalize();
+    return axis;
   }
 
-  Future<void> _rotateSelectedYQuarter() async {
-    final selected = _selectedModel;
-    if (selected == null) return;
-    selected.yQuarterTurns = (selected.yQuarterTurns + 1) % 4;
-    await _syncPlacedModelTransform(selected);
-    _showPlacementMessage('Y축을 90도 회전했어요.');
+  vector.Vector3 _cameraRightAxis(vector.Matrix4 cameraTransform) {
+    final column = cameraTransform.getColumn(0);
+    final axis = vector.Vector3(column.x, column.y, column.z);
+    if (axis.length2 < 0.0001) return vector.Vector3(1, 0, 0);
+    axis.normalize();
+    return axis;
   }
 
   Future<void> _removeSelected() async {
@@ -809,9 +930,14 @@ class _ArViewScreenState extends State<ArViewScreen> {
     if (nodeName == null || _arkitController == null) return;
     await _arkitController!.remove(nodeName);
     if (!mounted) return;
+    final removed = _placedModels[nodeName];
     setState(() {
       _placedModels.remove(nodeName);
-      _selectedNodeName = _placedModels.keys.firstOrNull;
+      _selectedNodeName = null;
+      _draggingNodeName = null;
+      if (removed != null) {
+        _activeAsset = removed.asset;
+      }
       _statusMessage = '선택한 모델을 제거했어요.';
     });
   }
@@ -934,13 +1060,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
             child: _BottomBar(
               hasSelectedObject: hasSelectedObject,
               canPlace: _activeAsset != null && _placementEligible,
-              modelRotationDeg: _selectedYawDegrees,
-              xRotationDeg: ((_selectedModel?.xQuarterTurns ?? 0) * 90) % 360,
-              yRotationDeg: ((_selectedModel?.yQuarterTurns ?? 0) * 90) % 360,
               onPlace: _placeActiveModel,
-              onRotateDrag: (dx) => _rotateSelected(-dx * 0.013),
-              onRotateXQuarter: _rotateSelectedXQuarter,
-              onRotateYQuarter: _rotateSelectedYQuarter,
+              onRotateDrag: _rotateSelectedFromWheel,
               onRemove: _removeSelected,
             ),
           ),
@@ -973,6 +1094,7 @@ class _PreparedModel {
   final String previewInvalidGlbPath;
   final double scale;
   final vector.Vector3 baseRotation;
+  final _ModelBounds? bounds;
   final _PreviewSize previewSize;
 
   const _PreparedModel({
@@ -982,6 +1104,7 @@ class _PreparedModel {
     required this.previewInvalidGlbPath,
     required this.scale,
     required this.baseRotation,
+    required this.bounds,
     required this.previewSize,
   });
 }
@@ -992,11 +1115,11 @@ class _PlacedModel {
   final String localGlbPath;
   final double scale;
   final vector.Vector3 baseRotation;
+  final _ModelBounds? bounds;
   final _PreviewSize previewSize;
+  vector.Vector3 groundPosition;
   vector.Vector3 position;
-  double zRotationRadians;
-  int xQuarterTurns;
-  int yQuarterTurns;
+  vector.Matrix4 userRotation;
 
   _PlacedModel({
     required this.nodeName,
@@ -1004,26 +1127,40 @@ class _PlacedModel {
     required this.localGlbPath,
     required this.scale,
     required this.baseRotation,
+    required this.bounds,
     required this.previewSize,
-    required this.position,
-  }) : zRotationRadians = 0,
-       xQuarterTurns = 0,
-       yQuarterTurns = 0;
-
-  vector.Vector3 get eulerAngles =>
-      baseRotation +
-      vector.Vector3(
-        xQuarterTurns * math.pi / 2,
-        zRotationRadians,
-        yQuarterTurns * math.pi / 2,
-      );
+    required this.groundPosition,
+  }) : position = groundPosition,
+       userRotation = vector.Matrix4.identity();
 }
 
 class _ModelCalibration {
   final double scale;
   final vector.Vector3 baseRotation;
+  final _ModelBounds? bounds;
 
-  const _ModelCalibration({required this.scale, required this.baseRotation});
+  const _ModelCalibration({
+    required this.scale,
+    required this.baseRotation,
+    required this.bounds,
+  });
+}
+
+class _ModelBounds {
+  final vector.Vector3 min;
+  final vector.Vector3 max;
+
+  const _ModelBounds({required this.min, required this.max});
+
+  Iterable<vector.Vector3> get corners sync* {
+    for (final x in [min.x, max.x]) {
+      for (final y in [min.y, max.y]) {
+        for (final z in [min.z, max.z]) {
+          yield vector.Vector3(x, y, z);
+        }
+      }
+    }
+  }
 }
 
 class _PreviewSize {
@@ -1502,25 +1639,15 @@ class _SidebarAssetTile extends StatelessWidget {
 class _BottomBar extends StatelessWidget {
   final bool hasSelectedObject;
   final bool canPlace;
-  final double modelRotationDeg;
-  final int xRotationDeg;
-  final int yRotationDeg;
   final VoidCallback onPlace;
-  final ValueChanged<double> onRotateDrag;
-  final VoidCallback onRotateXQuarter;
-  final VoidCallback onRotateYQuarter;
+  final ValueChanged<Offset> onRotateDrag;
   final VoidCallback onRemove;
 
   const _BottomBar({
     required this.hasSelectedObject,
     required this.canPlace,
-    required this.modelRotationDeg,
-    required this.xRotationDeg,
-    required this.yRotationDeg,
     required this.onPlace,
     required this.onRotateDrag,
-    required this.onRotateXQuarter,
-    required this.onRotateYQuarter,
     required this.onRemove,
   });
 
@@ -1531,33 +1658,13 @@ class _BottomBar extends StatelessWidget {
       return Stack(
         alignment: Alignment.bottomCenter,
         children: [
-          _RotationHandle(
-            rotationDeg: modelRotationDeg,
-            onDragDx: onRotateDrag,
-          ),
+          _RotationHandle(onDragDelta: onRotateDrag),
           Positioned(
             bottom: bottomPad + 12,
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                _ControlBtn(
-                  icon: Icons.rotate_90_degrees_ccw_rounded,
-                  label: 'X $xRotationDeg°',
-                  onTap: onRotateXQuarter,
-                ),
-                const SizedBox(width: 8),
-                _ControlBtn(
-                  icon: Icons.rotate_90_degrees_cw_rounded,
-                  label: 'Y $yRotationDeg°',
-                  onTap: onRotateYQuarter,
-                ),
-                const SizedBox(width: 8),
-                _ControlBtn(
-                  icon: Icons.delete_outline_rounded,
-                  label: '제거',
-                  onTap: onRemove,
-                ),
-              ],
+            child: _ControlBtn(
+              icon: Icons.delete_outline_rounded,
+              label: '제거',
+              onTap: onRemove,
             ),
           ),
         ],
@@ -1645,10 +1752,9 @@ class _ControlBtn extends StatelessWidget {
 }
 
 class _RotationHandle extends StatelessWidget {
-  final double rotationDeg;
-  final ValueChanged<double> onDragDx;
+  final ValueChanged<Offset> onDragDelta;
 
-  const _RotationHandle({required this.rotationDeg, required this.onDragDx});
+  const _RotationHandle({required this.onDragDelta});
 
   @override
   Widget build(BuildContext context) {
@@ -1656,7 +1762,7 @@ class _RotationHandle extends StatelessWidget {
     final height = width / 2;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      onHorizontalDragUpdate: (details) => onDragDx(details.delta.dx),
+      onPanUpdate: (details) => onDragDelta(details.delta),
       child: Container(
         width: double.infinity,
         height: height,
@@ -1675,37 +1781,7 @@ class _RotationHandle extends StatelessWidget {
         child: Stack(
           children: [
             Positioned.fill(
-              child: CustomPaint(
-                painter: _SemiCircleRulerPainter(rotationDeg: rotationDeg),
-              ),
-            ),
-            Positioned(
-              top: height * 0.12,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text(
-                      'Z축 자유 회전',
-                      style: GoogleFonts.nunito(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white.withValues(alpha: 0.64),
-                      ),
-                    ),
-                    Text(
-                      '${(rotationDeg > 180 ? rotationDeg - 360 : rotationDeg).round()}°',
-                      style: GoogleFonts.nunito(
-                        fontSize: 26,
-                        fontWeight: FontWeight.w800,
-                        color: Colors.white.withValues(alpha: 0.92),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              child: CustomPaint(painter: _SemiCircleRulerPainter()),
             ),
           ],
         ),
@@ -1715,9 +1791,7 @@ class _RotationHandle extends StatelessWidget {
 }
 
 class _SemiCircleRulerPainter extends CustomPainter {
-  final double rotationDeg;
-
-  _SemiCircleRulerPainter({required this.rotationDeg});
+  _SemiCircleRulerPainter();
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -1753,29 +1827,39 @@ class _SemiCircleRulerPainter extends CustomPainter {
       );
     }
 
-    final displayDeg = rotationDeg > 180 ? rotationDeg - 360 : rotationDeg;
-    final arcDeg = (90.0 - displayDeg).clamp(0.0, 180.0);
-    final indicatorAngle = arcDeg * math.pi / 180;
-    final ipx = cx - radius * math.cos(indicatorAngle);
-    final ipy = cy - radius * math.sin(indicatorAngle);
-
-    canvas.drawCircle(
-      Offset(ipx, ipy),
-      7,
+    final center = Offset(cx, size.height * 0.56);
+    canvas.drawLine(
+      Offset(cx - radius * 0.33, center.dy),
+      Offset(cx + radius * 0.33, center.dy),
       Paint()
-        ..color = AppColors.primary.withValues(alpha: 0.25)
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+        ..color = AppColors.primary.withValues(alpha: 0.45)
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
+    );
+    canvas.drawLine(
+      Offset(cx, size.height * 0.34),
+      Offset(cx, size.height * 0.78),
+      Paint()
+        ..color = AppColors.accent.withValues(alpha: 0.45)
+        ..strokeWidth = 2
+        ..strokeCap = StrokeCap.round,
     );
     canvas.drawCircle(
-      Offset(ipx, ipy),
-      4.5,
-      Paint()..color = AppColors.primary.withValues(alpha: 0.95),
+      center,
+      9,
+      Paint()
+        ..color = Colors.white.withValues(alpha: 0.16)
+        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 7),
+    );
+    canvas.drawCircle(
+      center,
+      4.8,
+      Paint()..color = Colors.white.withValues(alpha: 0.85),
     );
   }
 
   @override
-  bool shouldRepaint(_SemiCircleRulerPainter oldDelegate) =>
-      oldDelegate.rotationDeg != rotationDeg;
+  bool shouldRepaint(_SemiCircleRulerPainter oldDelegate) => false;
 }
 
 class _SelectionRing extends StatefulWidget {
