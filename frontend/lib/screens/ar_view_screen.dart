@@ -8,6 +8,7 @@ import 'dart:ui' as ui;
 import 'package:arkit_plugin/arkit_plugin.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -36,13 +37,31 @@ class ArViewScreen extends StatefulWidget {
 class _ArViewScreenState extends State<ArViewScreen> {
   static const _previewNodeName = 'placement_preview';
   static const _objectPickRadius = 110.0;
+  static const _ambientLightNodeName = 'estimated_ambient_light';
+  static const _keyLightNodeName = 'estimated_key_light';
+  static const _shadowSuffix = '__contact_shadow';
+  static const _yawSnapStep = math.pi / 12; // 15° detents
+  static const _yawSnapWindow = math.pi / 45; // ±4° sticky zone
+  // Soft "upright" assist window. Lean is otherwise completely free (any
+  // direction, any angle) so models authored lying down can be stood up.
+  static const _uprightWindow = 5 * math.pi / 180; // ±5° upright assist
 
   ARKitController? _arkitController;
   Timer? _raycastTimer;
+  Timer? _lightTimer;
+  Timer? _statusClearTimer;
 
   final Set<String> _planeAnchorIds = {};
   final Map<String, _PreparedModel> _preparedModels = {};
   final Map<String, _PlacedModel> _placedModels = {};
+
+  bool _lightRigReady = false;
+  double _ambientIntensity = 1000;
+  double _ambientTemperature = 6500;
+  bool _lightEstimateActive = false;
+
+  int? _yawDetentForHaptic;
+  bool _tiltSnappedForHaptic = false;
 
   List<FurnitureAsset> _ownedAssets = [];
   bool _libraryLoading = false;
@@ -95,6 +114,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
   @override
   void dispose() {
     _raycastTimer?.cancel();
+    _lightTimer?.cancel();
+    _statusClearTimer?.cancel();
     _arkitController?.dispose();
     super.dispose();
   }
@@ -510,6 +531,157 @@ class _ArViewScreenState extends State<ArViewScreen> {
       const Duration(milliseconds: 120),
       (_) => _performRaycast(),
     );
+    _setupLightRig();
+    _lightTimer = Timer.periodic(
+      const Duration(milliseconds: 900),
+      (_) => _syncLightingWithRoom(),
+    );
+  }
+
+  /// Adds an ambient fill + a directional key light that we keep in sync with
+  /// ARKit's real-time light estimate so placed furniture matches the room's
+  /// brightness and warmth.
+  Future<void> _setupLightRig() async {
+    final controller = _arkitController;
+    if (controller == null || _lightRigReady) return;
+    try {
+      await controller.add(_ambientLightNode());
+      await controller.add(_keyLightNode());
+      _lightRigReady = true;
+    } catch (e) {
+      debugPrint('[AR] light rig setup failed: $e');
+    }
+  }
+
+  ARKitNode _ambientLightNode() => ARKitNode(
+    name: _ambientLightNodeName,
+    light: ARKitLight(
+      type: ARKitLightType.ambient,
+      temperature: _ambientTemperature,
+      intensity: _ambientIntensity * 0.6,
+    ),
+  );
+
+  ARKitNode _keyLightNode() => ARKitNode(
+    name: _keyLightNodeName,
+    light: ARKitLight(
+      type: ARKitLightType.directional,
+      temperature: _ambientTemperature,
+      intensity: _ambientIntensity * 0.5,
+    ),
+    // Aim the directional light down and slightly forward, like a ceiling lamp.
+    eulerAngles: vector.Vector3(-1.05, -0.45, 0),
+  );
+
+  Future<void> _syncLightingWithRoom() async {
+    final controller = _arkitController;
+    if (controller == null) return;
+    final estimate = await controller.getLightEstimate();
+    if (estimate == null || !mounted) return;
+
+    final targetIntensity = estimate.ambientIntensity.clamp(150.0, 2000.0);
+    final targetTemperature = estimate.ambientColorTemperature.clamp(
+      3200.0,
+      9000.0,
+    );
+
+    // Ease toward the estimate so lighting transitions smoothly instead of
+    // flickering frame to frame.
+    _ambientIntensity += (targetIntensity - _ambientIntensity) * 0.25;
+    _ambientTemperature += (targetTemperature - _ambientTemperature) * 0.25;
+
+    if (!_lightRigReady) return;
+    try {
+      await controller.update(_ambientLightNodeName, node: _ambientLightNode());
+      await controller.update(_keyLightNodeName, node: _keyLightNode());
+    } catch (e) {
+      debugPrint('[AR] light rig update failed: $e');
+    }
+    if (!_lightEstimateActive && mounted) {
+      setState(() => _lightEstimateActive = true);
+    }
+  }
+
+  /// World-space half extents (x, z) of the model footprint at its current
+  /// orientation, used to size the contact shadow under it.
+  ({double x, double z}) _footprintHalfExtents(_PlacedModel model) {
+    final bounds = model.bounds ?? _fallbackBounds(model.previewSize);
+    final orientation = _orientationMatrixForModel(model);
+    var minX = double.infinity, maxX = double.negativeInfinity;
+    var minZ = double.infinity, maxZ = double.negativeInfinity;
+    for (final corner in bounds.corners) {
+      final transformed = orientation.transform3(
+        vector.Vector3(
+          corner.x * model.scale,
+          corner.y * model.scale,
+          corner.z * model.scale,
+        ),
+      );
+      minX = math.min(minX, transformed.x);
+      maxX = math.max(maxX, transformed.x);
+      minZ = math.min(minZ, transformed.z);
+      maxZ = math.max(maxZ, transformed.z);
+    }
+    if (!minX.isFinite || !minZ.isFinite) {
+      return (x: model.previewSize.width / 2, z: model.previewSize.depth / 2);
+    }
+    return (x: (maxX - minX) / 2, z: (maxZ - minZ) / 2);
+  }
+
+  String _shadowNodeName(_PlacedModel model) => '${model.nodeName}$_shadowSuffix';
+
+  /// A flat, dark, translucent ellipse sized to the model's footprint. Using a
+  /// solid color (rather than a texture) keeps it reliable across devices while
+  /// still anchoring the object visually to the floor.
+  ARKitNode _shadowNodeFor(_PlacedModel model) {
+    final half = _footprintHalfExtents(model);
+    final radiusX = (half.x * 1.3).clamp(0.05, 2.5).toDouble();
+    final radiusZ = (half.z * 1.3).clamp(0.05, 2.5).toDouble();
+    final material = ARKitMaterial(
+      diffuse: ARKitMaterialProperty.color(Colors.black),
+      lightingModelName: ARKitLightingModel.constant,
+      blendMode: ARKitBlendMode.alpha,
+      transparency: 0.32,
+      writesToDepthBuffer: false,
+      doubleSided: true,
+    );
+    // A thin cylinder lies flat in the XZ plane; scale it into an ellipse that
+    // matches the footprint, and lift it a hair to avoid z-fighting.
+    return ARKitNode(
+      name: _shadowNodeName(model),
+      geometry: ARKitCylinder(
+        radius: 1.0,
+        height: 0.002,
+        materials: [material],
+      ),
+      scale: vector.Vector3(radiusX, 1, radiusZ),
+      position: model.groundPosition + vector.Vector3(0, 0.003, 0),
+      renderingOrder: -10,
+    );
+  }
+
+  Future<void> _addShadow(_PlacedModel model) async {
+    final controller = _arkitController;
+    if (controller == null) return;
+    try {
+      await controller.add(_shadowNodeFor(model));
+    } catch (e) {
+      debugPrint('[AR] shadow add failed: $e');
+    }
+  }
+
+  Future<void> _syncShadow(_PlacedModel model) async {
+    final controller = _arkitController;
+    if (controller == null) return;
+    try {
+      await controller.update(_shadowNodeName(model), node: _shadowNodeFor(model));
+    } catch (_) {
+      await _addShadow(model);
+    }
+  }
+
+  Future<void> _removeShadow(_PlacedModel model) async {
+    await _arkitController?.remove(_shadowNodeName(model));
   }
 
   void _onAnchorAdded(ARKitAnchor anchor) {
@@ -538,6 +710,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
     if (nodeName == null) return;
     final model = _placedModels[nodeName];
     if (model == null || !mounted) return;
+    _syncHapticTrackers(model);
     setState(() {
       _selectedNodeName = nodeName;
       _activeAsset = model.asset;
@@ -550,6 +723,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
     if (nodeName == null) return;
     final model = _placedModels[nodeName];
     if (model == null || !mounted) return;
+    _syncHapticTrackers(model);
     setState(() {
       _draggingNodeName = nodeName;
       _selectedNodeName = nodeName;
@@ -576,10 +750,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
   void _handleScenePanEnd() {
     if (_draggingNodeName == null) return;
-    setState(() {
-      _draggingNodeName = null;
-      _statusMessage = '이 위치에 이동했어요.';
-    });
+    setState(() => _draggingNodeName = null);
+    _showStatus('이 위치로 옮겼어요.');
   }
 
   Future<String?> _nearestModelAt(Offset screenPoint) async {
@@ -696,6 +868,16 @@ class _ArViewScreenState extends State<ArViewScreen> {
         ? prepared.previewInvalidGlbPath
         : prepared.previewValidGlbPath;
 
+    // Lift the preview so its base rests on the surface, matching how the model
+    // will sit once placed (instead of sinking halfway into the floor).
+    final lift = _verticalLift(
+      prepared.bounds,
+      prepared.previewSize,
+      prepared.scale,
+      _baseRotationMatrix(prepared.baseRotation),
+    );
+    final liftedPosition = position + vector.Vector3(0, lift, 0);
+
     if (_previewNodeAdded &&
         _previewIsInvalid == invalid &&
         _previewGlbPath == previewPath) {
@@ -704,7 +886,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
         assetType: AssetType.documents,
         url: previewPath,
         scale: vector.Vector3.all(prepared.scale),
-        position: position,
+        position: liftedPosition,
         eulerAngles: prepared.baseRotation,
       );
       await controller.update(_previewNodeName, node: node);
@@ -719,7 +901,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       assetType: AssetType.documents,
       url: previewPath,
       scale: vector.Vector3.all(prepared.scale),
-      position: position,
+      position: liftedPosition,
       eulerAngles: prepared.baseRotation,
     );
     await controller.add(node);
@@ -760,12 +942,15 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
     await _addPlacedModel(model);
     if (!mounted) return;
+    _yawDetentForHaptic = 0;
+    _tiltSnappedForHaptic = true;
     setState(() {
       _placedModels[nodeName] = model;
       _selectedNodeName = nodeName;
       _showDragHint = true;
-      _statusMessage = '${active.name} 배치됨';
     });
+    _showStatus('${active.name} 배치됨 · 실측 크기로 표시 중');
+    HapticFeedback.mediumImpact();
   }
 
   void _setModelGroundPosition(_PlacedModel model, vector.Vector3 ground) {
@@ -774,16 +959,29 @@ class _ArViewScreenState extends State<ArViewScreen> {
         ground + vector.Vector3(0, _verticalLiftForModel(model), 0);
   }
 
-  double _verticalLiftForModel(_PlacedModel model) {
-    final bounds = model.bounds ?? _fallbackBounds(model.previewSize);
-    final orientation = _orientationMatrixForModel(model);
+  double _verticalLiftForModel(_PlacedModel model) => _verticalLift(
+    model.bounds,
+    model.previewSize,
+    model.scale,
+    _orientationMatrixForModel(model),
+  );
+
+  /// How far to raise a model so its lowest point rests exactly on the ground
+  /// given its current orientation.
+  double _verticalLift(
+    _ModelBounds? rawBounds,
+    _PreviewSize size,
+    double scale,
+    vector.Matrix4 orientation,
+  ) {
+    final bounds = rawBounds ?? _fallbackBounds(size);
 
     var minY = double.infinity;
     for (final corner in bounds.corners) {
       final scaledCorner = vector.Vector3(
-        corner.x * model.scale,
-        corner.y * model.scale,
-        corner.z * model.scale,
+        corner.x * scale,
+        corner.y * scale,
+        corner.z * scale,
       );
       final transformed = orientation.transform3(scaledCorner);
       minY = math.min(minY, transformed.y);
@@ -824,12 +1022,14 @@ class _ArViewScreenState extends State<ArViewScreen> {
       );
       await controller.add(fallback);
     }
+    await _addShadow(model);
   }
 
   Future<void> _rebuildPlacedModel(_PlacedModel model) async {
     final controller = _arkitController;
     if (controller == null) return;
     await controller.remove(model.nodeName);
+    await _removeShadow(model);
     await _addPlacedModel(model);
     if (mounted) setState(() {});
   }
@@ -851,9 +1051,71 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   vector.Matrix4 _orientationMatrixForModel(_PlacedModel model) {
-    return model.userRotation.multiplied(
+    return _userRotationMatrix(model).multiplied(
       _baseRotationMatrix(model.baseRotation),
     );
+  }
+
+  /// Heading (yaw, about world up) combined with a free-form lean. The lean is
+  /// applied in world space on top of the heading, so it can tip the object to
+  /// any angle in any direction (full rotational freedom).
+  vector.Matrix4 _userRotationMatrix(_PlacedModel model) {
+    final yaw = vector.Matrix4.identity()..rotateY(model.userYaw);
+    return model.leanRotation.multiplied(yaw);
+  }
+
+  /// Among the model's six axis directions, finds the one currently pointing
+  /// most upward (in world space) and the angle between it and vertical.
+  /// Rotating that axis to vertical is the minimal correction that makes the
+  /// object rest flat on the floor, regardless of how the model was authored.
+  ({vector.Vector3 worldDir, double tilt}) _nearestUprightAxis(
+    _PlacedModel model,
+  ) {
+    final s = _orientationMatrixForModel(model).storage;
+    var best = vector.Vector3(0, 1, 0);
+    var bestUp = -2.0;
+    for (final local in const [
+      [1.0, 0.0, 0.0],
+      [-1.0, 0.0, 0.0],
+      [0.0, 1.0, 0.0],
+      [0.0, -1.0, 0.0],
+      [0.0, 0.0, 1.0],
+      [0.0, 0.0, -1.0],
+    ]) {
+      // Rotation-only transform of the local axis into world space.
+      final w = vector.Vector3(
+        s[0] * local[0] + s[4] * local[1] + s[8] * local[2],
+        s[1] * local[0] + s[5] * local[1] + s[9] * local[2],
+        s[2] * local[0] + s[6] * local[1] + s[10] * local[2],
+      );
+      if (w.y > bestUp) {
+        bestUp = w.y;
+        best = w;
+      }
+    }
+    return (worldDir: best, tilt: math.acos(bestUp.clamp(-1.0, 1.0)));
+  }
+
+  /// How far the object is tipped from resting flat on the ground (radians).
+  double _groundTilt(_PlacedModel model) => _nearestUprightAxis(model).tilt;
+
+  bool _isAlignedToGround(_PlacedModel model) =>
+      _groundTilt(model) < _uprightWindow;
+
+  int _groundTiltDegrees(_PlacedModel model) =>
+      (_groundTilt(model) * 180 / math.pi).round();
+
+  /// Horizontal axis (in world space) perpendicular to the viewer's line of
+  /// sight, used so a vertical drag tips the object toward/away from the user.
+  /// Walking around the object lets the user lean it in any direction.
+  Future<vector.Vector3> _cameraHorizontalRightAxis() async {
+    final camera = await _arkitController?.pointOfViewTransform();
+    if (camera == null) return vector.Vector3(1, 0, 0);
+    final column = camera.getColumn(0);
+    final axis = vector.Vector3(column.x, 0, column.z);
+    if (axis.length2 < 0.0001) return vector.Vector3(1, 0, 0);
+    axis.normalize();
+    return axis;
   }
 
   vector.Matrix4 _baseRotationMatrix(vector.Vector3 eulerAngles) {
@@ -872,6 +1134,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       await _rebuildPlacedModel(model);
       return;
     }
+    await _syncShadow(model);
     if (mounted) setState(() {});
   }
 
@@ -879,58 +1142,110 @@ class _ArViewScreenState extends State<ArViewScreen> {
     final selected = _selectedModel;
     if (selected == null) return;
 
-    final yawRadians = -delta.dx * 0.013;
-    final tiltRadians = -delta.dy * 0.013;
-    if (yawRadians != 0) {
-      final yawRotation = vector.Matrix4.identity()
-        ..rotate(vector.Vector3(0, 1, 0), yawRadians);
-      selected.userRotation = yawRotation.multiplied(selected.userRotation);
-    }
-    if (tiltRadians != 0) {
-      final tiltAxis = await _cameraObjectTiltAxis(selected);
-      final tiltRotation = vector.Matrix4.identity()
-        ..rotate(tiltAxis, tiltRadians);
-      selected.userRotation = tiltRotation.multiplied(selected.userRotation);
+    // Horizontal drag spins the object (yaw, with 15° detents); vertical drag
+    // tips it over with no limit, about a camera-relative horizontal axis.
+    selected.rawYaw -= delta.dx * 0.011;
+    _applyYawSnapping(selected, haptics: true);
+
+    final leanDelta = -delta.dy * 0.0085;
+    if (leanDelta != 0) {
+      final axis = await _cameraHorizontalRightAxis();
+      final increment = vector.Matrix4.identity()..rotate(axis, leanDelta);
+      selected.leanRotation = increment.multiplied(selected.leanRotation);
+      _handleUprightHaptic(selected);
     }
 
     _setModelGroundPosition(selected, selected.groundPosition);
     await _syncPlacedModelTransform(selected);
   }
 
-  Future<vector.Vector3> _cameraObjectTiltAxis(_PlacedModel model) async {
-    const minAxisLength = 0.0001;
-    final cameraTransform = await _arkitController?.pointOfViewTransform();
-    if (cameraTransform == null) return vector.Vector3(1, 0, 0);
+  /// Snaps the heading to the nearest 15° detent when close, for a "magnetic"
+  /// feel, while leaving the full range reachable.
+  void _applyYawSnapping(_PlacedModel model, {required bool haptics}) {
+    final nearestDetent = (model.rawYaw / _yawSnapStep).round();
+    final snappedYawTarget = nearestDetent * _yawSnapStep;
+    final yawSnapped = (model.rawYaw - snappedYawTarget).abs() < _yawSnapWindow;
+    model.userYaw = yawSnapped ? snappedYawTarget : model.rawYaw;
 
-    final cameraPosition = cameraTransform.getTranslation();
-    final cameraToObject = model.groundPosition - cameraPosition;
-    if (cameraToObject.length2 < minAxisLength) {
-      return _cameraRightAxis(cameraTransform);
+    if (!haptics) return;
+    if (yawSnapped && _yawDetentForHaptic != nearestDetent) {
+      HapticFeedback.selectionClick();
     }
-
-    cameraToObject.normalize();
-    final axis = cameraToObject.cross(vector.Vector3(0, 1, 0));
-    if (axis.length2 < minAxisLength) {
-      return _cameraRightAxis(cameraTransform);
-    }
-    axis.normalize();
-    return axis;
+    _yawDetentForHaptic = yawSnapped ? nearestDetent : null;
   }
 
-  vector.Vector3 _cameraRightAxis(vector.Matrix4 cameraTransform) {
-    final column = cameraTransform.getColumn(0);
-    final axis = vector.Vector3(column.x, column.y, column.z);
-    if (axis.length2 < 0.0001) return vector.Vector3(1, 0, 0);
-    axis.normalize();
-    return axis;
+  void _handleUprightHaptic(_PlacedModel model) {
+    final aligned = _isAlignedToGround(model);
+    if (aligned && !_tiltSnappedForHaptic) {
+      HapticFeedback.lightImpact();
+    }
+    _tiltSnappedForHaptic = aligned;
+  }
+
+  void _onRotationGestureEnd() {
+    final selected = _selectedModel;
+    if (selected == null) return;
+    // Settle yaw onto its snap target so the next drag continues smoothly.
+    selected.rawYaw = selected.userYaw;
+    final aligned = _isAlignedToGround(selected);
+    _showStatus(
+      aligned
+          ? '${_yawDegrees(selected)}° 회전 · 바닥에 정렬됨'
+          : '${_yawDegrees(selected)}° 회전 · ${_groundTiltDegrees(selected)}° 기울어짐',
+    );
+  }
+
+  /// Stand the selected object up onto the floor via the *shortest* path: take
+  /// whichever of the object's faces is currently closest to facing up and
+  /// rotate by the minimal angle so it rests flat. This adapts to however the
+  /// object is currently tipped (and to models authored lying down), rather
+  /// than snapping to one fixed pose.
+  Future<void> _straightenSelected() async {
+    final selected = _selectedModel;
+    if (selected == null) return;
+    if (_isAlignedToGround(selected)) {
+      _showStatus('이미 바닥에 똑바로 서 있어요.');
+      return;
+    }
+
+    final nearest = _nearestUprightAxis(selected);
+    final worldUp = vector.Vector3(0, 1, 0);
+    var axis = nearest.worldDir.cross(worldUp);
+    if (axis.length2 < 1e-8) {
+      // Already vertical, or pointing straight down: any horizontal axis works.
+      axis = vector.Vector3(1, 0, 0);
+    } else {
+      axis.normalize();
+    }
+    // Apply the world-space correction on top of the current orientation.
+    final correction = vector.Matrix4.identity()..rotate(axis, nearest.tilt);
+    selected.leanRotation = correction.multiplied(selected.leanRotation);
+
+    _syncHapticTrackers(selected);
+    HapticFeedback.mediumImpact();
+    _setModelGroundPosition(selected, selected.groundPosition);
+    await _syncPlacedModelTransform(selected);
+    _showStatus('가장 가까운 방향으로 바닥에 세웠어요.');
+  }
+
+  int _yawDegrees(_PlacedModel model) {
+    var deg = (model.userYaw * 180 / math.pi).round() % 360;
+    if (deg < 0) deg += 360;
+    return deg;
+  }
+
+  bool _isYawSnapped(_PlacedModel model) {
+    final ratio = model.userYaw / _yawSnapStep;
+    return (ratio - ratio.round()).abs() < 0.01;
   }
 
   Future<void> _removeSelected() async {
     final nodeName = _selectedNodeName;
     if (nodeName == null || _arkitController == null) return;
-    await _arkitController!.remove(nodeName);
-    if (!mounted) return;
     final removed = _placedModels[nodeName];
+    await _arkitController!.remove(nodeName);
+    if (removed != null) await _removeShadow(removed);
+    if (!mounted) return;
     setState(() {
       _placedModels.remove(nodeName);
       _selectedNodeName = null;
@@ -938,13 +1253,111 @@ class _ArViewScreenState extends State<ArViewScreen> {
       if (removed != null) {
         _activeAsset = removed.asset;
       }
-      _statusMessage = '선택한 모델을 제거했어요.';
     });
+    _showStatus('선택한 모델을 제거했어요.');
   }
 
-  void _showPlacementMessage(String message) {
+  Future<void> _clearAllModels() async {
+    if (_placedModels.isEmpty) return;
+    final count = _placedModels.length;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppColors.card,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+        ),
+        title: Text(
+          '전체 삭제',
+          style: GoogleFonts.nunito(
+            color: AppColors.textPrimary,
+            fontWeight: FontWeight.w800,
+          ),
+        ),
+        content: Text(
+          '배치한 $count개의 모델을 모두 제거할까요?',
+          style: GoogleFonts.nunito(color: AppColors.textSecondary),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(
+              '취소',
+              style: GoogleFonts.nunito(color: AppColors.textSecondary),
+            ),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(
+              '모두 제거',
+              style: GoogleFonts.nunito(
+                color: Colors.redAccent,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    final controller = _arkitController;
+    if (controller != null) {
+      for (final model in _placedModels.values) {
+        await controller.remove(model.nodeName);
+        await _removeShadow(model);
+      }
+    }
     if (!mounted) return;
+    setState(() {
+      _placedModels.clear();
+      _selectedNodeName = null;
+      _draggingNodeName = null;
+    });
+    _showStatus('배치한 모델을 모두 제거했어요.');
+  }
+
+  String? _roomLightLabel() {
+    if (!_lightEstimateActive) return null;
+    final brightness = _ambientIntensity < 500
+        ? '어두움'
+        : _ambientIntensity < 1100
+        ? '보통'
+        : '밝음';
+    final warmth = _ambientTemperature < 4600
+        ? '따뜻함'
+        : _ambientTemperature < 6200
+        ? '중간'
+        : '시원함';
+    return '$brightness · $warmth';
+  }
+
+  Color _roomLightColor() {
+    if (_ambientTemperature < 4600) return AppColors.accent;
+    if (_ambientTemperature > 6200) return const Color(0xFF8FB7E8);
+    return Colors.white;
+  }
+
+  void _showPlacementMessage(String message) => _showStatus(message);
+
+  void _showStatus(String message, {bool transient = true}) {
+    if (!mounted) return;
+    _statusClearTimer?.cancel();
     setState(() => _statusMessage = message);
+    if (transient) {
+      _statusClearTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted && _statusMessage == message) {
+          setState(() => _statusMessage = null);
+        }
+      });
+    }
+  }
+
+  void _syncHapticTrackers(_PlacedModel model) {
+    final detent = (model.rawYaw / _yawSnapStep).round();
+    final yawSnapped =
+        (model.rawYaw - detent * _yawSnapStep).abs() < _yawSnapWindow;
+    _yawDetentForHaptic = yawSnapped ? detent : null;
+    _tiltSnappedForHaptic = _isAlignedToGround(model);
   }
 
   @override
@@ -961,6 +1374,13 @@ class _ArViewScreenState extends State<ArViewScreen> {
           ARKitSceneView(
             configuration: ARKitConfiguration.worldTracking,
             planeDetection: ARPlaneDetection.horizontal,
+            // Generate HDR environment probes from the camera feed so models are
+            // lit and reflect the real room (image-based lighting).
+            environmentTexturing:
+                ARWorldTrackingConfigurationEnvironmentTexturing.automatic,
+            // We drive our own light rig from ARKit's light estimate, so the
+            // flat default fill light is disabled to avoid washing out the IBL.
+            autoenablesDefaultLighting: false,
             enableTapRecognizer: false,
             enablePanRecognizer: false,
             showFeaturePoints: false,
@@ -983,7 +1403,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
             child: _TopBar(
               modelName: activeName,
               placedCount: _placedModels.length,
+              dimensions: _activeAsset?.dimensions,
+              lightLabel: _roomLightLabel(),
+              lightColor: _roomLightColor(),
               onClose: () => Navigator.pop(context),
+              onClearAll: _placedModels.isNotEmpty ? _clearAllModels : null,
             ),
           ),
           if (_libraryError != null)
@@ -1060,8 +1484,18 @@ class _ArViewScreenState extends State<ArViewScreen> {
             child: _BottomBar(
               hasSelectedObject: hasSelectedObject,
               canPlace: _activeAsset != null && _placementEligible,
+              yawDegrees: _selectedModel != null
+                  ? _yawDegrees(_selectedModel!)
+                  : 0,
+              yawRadians: _selectedModel?.userYaw ?? 0,
+              isUpright: _selectedModel == null
+                  ? true
+                  : _isAlignedToGround(_selectedModel!),
+              isYawSnapped: _selectedModel != null && _isYawSnapped(_selectedModel!),
               onPlace: _placeActiveModel,
               onRotateDrag: _rotateSelectedFromWheel,
+              onRotateEnd: _onRotationGestureEnd,
+              onStraighten: _straightenSelected,
               onRemove: _removeSelected,
             ),
           ),
@@ -1119,7 +1553,15 @@ class _PlacedModel {
   final _PreviewSize previewSize;
   vector.Vector3 groundPosition;
   vector.Vector3 position;
-  vector.Matrix4 userRotation;
+
+  /// Heading about world up. [rawYaw] is the unsnapped gesture accumulation;
+  /// [userYaw] is what is actually applied (snapped to 15° detents when close).
+  double rawYaw;
+  double userYaw;
+
+  /// Free-form lean accumulated in world space about camera-relative axes.
+  /// Unbounded so the object can be tipped over or stood up from any pose.
+  vector.Matrix4 leanRotation;
 
   _PlacedModel({
     required this.nodeName,
@@ -1131,7 +1573,9 @@ class _PlacedModel {
     required this.previewSize,
     required this.groundPosition,
   }) : position = groundPosition,
-       userRotation = vector.Matrix4.identity();
+       rawYaw = 0,
+       userYaw = 0,
+       leanRotation = vector.Matrix4.identity();
 }
 
 class _ModelCalibration {
@@ -1178,16 +1622,26 @@ class _PreviewSize {
 class _TopBar extends StatelessWidget {
   final String modelName;
   final int placedCount;
+  final String? dimensions;
+  final String? lightLabel;
+  final Color lightColor;
   final VoidCallback onClose;
+  final VoidCallback? onClearAll;
 
   const _TopBar({
     required this.modelName,
     required this.placedCount,
+    required this.dimensions,
+    required this.lightLabel,
+    required this.lightColor,
     required this.onClose,
+    required this.onClearAll,
   });
 
   @override
   Widget build(BuildContext context) {
+    final dims = dimensions;
+    final hasRealSize = dims != null && !dims.contains('미입력');
     return Container(
       padding: EdgeInsets.only(
         top: MediaQuery.of(context).padding.top + 8,
@@ -1203,6 +1657,7 @@ class _TopBar extends StatelessWidget {
         ),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           IconButton.filled(
             style: IconButton.styleFrom(
@@ -1234,34 +1689,118 @@ class _TopBar extends StatelessWidget {
                     color: Colors.white,
                   ),
                 ),
+                if (dims != null) ...[
+                  const SizedBox(height: 3),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.straighten_rounded,
+                        size: 12,
+                        color: hasRealSize
+                            ? AppColors.accent
+                            : Colors.white.withValues(alpha: 0.5),
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: Text(
+                          hasRealSize ? '실측 $dims' : dims,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: GoogleFonts.nunito(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: hasRealSize
+                                ? AppColors.accent
+                                : Colors.white.withValues(alpha: 0.55),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
               ],
             ),
           ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-            decoration: BoxDecoration(
-              color: AppColors.primary.withValues(alpha: 0.86),
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Icon(
-                  Icons.view_in_ar_rounded,
-                  color: Colors.white,
-                  size: 14,
+          const SizedBox(width: 8),
+          if (onClearAll != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 4),
+              child: IconButton.filled(
+                style: IconButton.styleFrom(
+                  backgroundColor: Colors.white.withValues(alpha: 0.13),
+                  foregroundColor: Colors.white,
+                  minimumSize: const Size(40, 40),
                 ),
-                const SizedBox(width: 5),
-                Text(
-                  'ARKit',
-                  style: GoogleFonts.nunito(
-                    color: Colors.white,
-                    fontSize: 11,
-                    fontWeight: FontWeight.w800,
+                tooltip: '전체 삭제',
+                onPressed: onClearAll,
+                icon: const Icon(Icons.delete_sweep_rounded, size: 19),
+              ),
+            ),
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.end,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 6,
+                ),
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.86),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(
+                      Icons.view_in_ar_rounded,
+                      color: Colors.white,
+                      size: 14,
+                    ),
+                    const SizedBox(width: 5),
+                    Text(
+                      'ARKit',
+                      style: GoogleFonts.nunito(
+                        color: Colors.white,
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (lightLabel != null) ...[
+                const SizedBox(height: 6),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: lightColor.withValues(alpha: 0.4),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.wb_sunny_rounded, color: lightColor, size: 12),
+                      const SizedBox(width: 4),
+                      Text(
+                        lightLabel!,
+                        style: GoogleFonts.nunito(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
-            ),
+            ],
           ),
         ],
       ),
@@ -1639,15 +2178,27 @@ class _SidebarAssetTile extends StatelessWidget {
 class _BottomBar extends StatelessWidget {
   final bool hasSelectedObject;
   final bool canPlace;
+  final int yawDegrees;
+  final double yawRadians;
+  final bool isUpright;
+  final bool isYawSnapped;
   final VoidCallback onPlace;
   final ValueChanged<Offset> onRotateDrag;
+  final VoidCallback onRotateEnd;
+  final VoidCallback onStraighten;
   final VoidCallback onRemove;
 
   const _BottomBar({
     required this.hasSelectedObject,
     required this.canPlace,
+    required this.yawDegrees,
+    required this.yawRadians,
+    required this.isUpright,
+    required this.isYawSnapped,
     required this.onPlace,
     required this.onRotateDrag,
+    required this.onRotateEnd,
+    required this.onStraighten,
     required this.onRemove,
   });
 
@@ -1657,14 +2208,56 @@ class _BottomBar extends StatelessWidget {
     if (hasSelectedObject) {
       return Stack(
         alignment: Alignment.bottomCenter,
+        clipBehavior: Clip.none,
         children: [
-          _RotationHandle(onDragDelta: onRotateDrag),
+          _RotationHandle(onDragDelta: onRotateDrag, onDragEnd: onRotateEnd),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: bottomPad + 142,
+            child: IgnorePointer(
+              child: Center(
+                child: _RotationReadout(
+                  yawDegrees: yawDegrees,
+                  isUpright: isUpright,
+                  isYawSnapped: isYawSnapped,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: bottomPad + 72,
+            child: IgnorePointer(
+              child: Center(
+                child: _CompassDial(
+                  yaw: yawRadians,
+                  aligned: isUpright && isYawSnapped,
+                ),
+              ),
+            ),
+          ),
           Positioned(
             bottom: bottomPad + 12,
-            child: _ControlBtn(
-              icon: Icons.delete_outline_rounded,
-              label: '제거',
-              onTap: onRemove,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                _ControlBtn(
+                  icon: Icons.straighten_rounded,
+                  label: '바로 세우기',
+                  highlight: !isUpright,
+                  onTap: onStraighten,
+                ),
+                const SizedBox(width: 10),
+                _ControlBtn(
+                  icon: Icons.delete_outline_rounded,
+                  label: '제거',
+                  onTap: onRemove,
+                ),
+              ],
             ),
           ),
         ],
@@ -1704,6 +2297,7 @@ class _ControlBtn extends StatelessWidget {
   final VoidCallback onTap;
   final bool isWide;
   final bool subtle;
+  final bool highlight;
 
   const _ControlBtn({
     required this.icon,
@@ -1711,10 +2305,19 @@ class _ControlBtn extends StatelessWidget {
     required this.onTap,
     this.isWide = false,
     this.subtle = false,
+    this.highlight = false,
   });
 
   @override
   Widget build(BuildContext context) {
+    final background = highlight
+        ? AppColors.primary.withValues(alpha: 0.92)
+        : subtle
+        ? Colors.white.withValues(alpha: 0.12)
+        : Colors.white.withValues(alpha: 0.21);
+    final borderColor = highlight
+        ? AppColors.primaryLight.withValues(alpha: 0.9)
+        : Colors.white.withValues(alpha: subtle ? 0.15 : 0.32);
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -1723,13 +2326,9 @@ class _ControlBtn extends StatelessWidget {
           vertical: 12,
         ),
         decoration: BoxDecoration(
-          color: subtle
-              ? Colors.white.withValues(alpha: 0.12)
-              : Colors.white.withValues(alpha: 0.21),
+          color: background,
           borderRadius: BorderRadius.circular(40),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: subtle ? 0.15 : 0.32),
-          ),
+          border: Border.all(color: borderColor),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -1753,8 +2352,9 @@ class _ControlBtn extends StatelessWidget {
 
 class _RotationHandle extends StatelessWidget {
   final ValueChanged<Offset> onDragDelta;
+  final VoidCallback? onDragEnd;
 
-  const _RotationHandle({required this.onDragDelta});
+  const _RotationHandle({required this.onDragDelta, this.onDragEnd});
 
   @override
   Widget build(BuildContext context) {
@@ -1763,6 +2363,8 @@ class _RotationHandle extends StatelessWidget {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onPanUpdate: (details) => onDragDelta(details.delta),
+      onPanEnd: (_) => onDragEnd?.call(),
+      onPanCancel: () => onDragEnd?.call(),
       child: Container(
         width: double.infinity,
         height: height,
@@ -1785,6 +2387,139 @@ class _RotationHandle extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _RotationReadout extends StatelessWidget {
+  final int yawDegrees;
+  final bool isUpright;
+  final bool isYawSnapped;
+
+  const _RotationReadout({
+    required this.yawDegrees,
+    required this.isUpright,
+    required this.isYawSnapped,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final aligned = isUpright && isYawSnapped;
+    final color = !isUpright
+        ? Colors.amberAccent
+        : aligned
+        ? AppColors.accent
+        : Colors.white;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.52),
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: color.withValues(alpha: aligned ? 0.85 : 0.35)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.rotate_right_rounded, size: 16, color: color),
+          const SizedBox(width: 6),
+          Text(
+            '$yawDegrees°',
+            style: GoogleFonts.nunito(
+              color: Colors.white,
+              fontSize: 15,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Container(width: 1, height: 14, color: Colors.white24),
+          const SizedBox(width: 8),
+          Icon(
+            isUpright ? Icons.check_circle_rounded : Icons.report_problem_rounded,
+            size: 14,
+            color: color,
+          ),
+          const SizedBox(width: 4),
+          Text(
+            isUpright ? '바닥에 정렬됨' : '기울어짐',
+            style: GoogleFonts.nunito(
+              color: color,
+              fontSize: 11,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _CompassDial extends StatelessWidget {
+  final double yaw;
+  final bool aligned;
+
+  const _CompassDial({required this.yaw, required this.aligned});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = aligned ? AppColors.accent : AppColors.primaryLight;
+    return Container(
+      width: 62,
+      height: 62,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: Colors.black.withValues(alpha: 0.5),
+        border: Border.all(
+          color: color.withValues(alpha: aligned ? 0.9 : 0.45),
+          width: 1.5,
+        ),
+      ),
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Fixed reference notch marking the viewer's "front" (0°).
+          Align(
+            alignment: Alignment.topCenter,
+            child: Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Container(
+                width: 4,
+                height: 4,
+                decoration: const BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: Colors.white60,
+                ),
+              ),
+            ),
+          ),
+          // Arrow that orbits the dial to show the object's facing direction.
+          Transform.rotate(
+            angle: yaw,
+            child: SizedBox(
+              width: 62,
+              height: 62,
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: Padding(
+                  padding: const EdgeInsets.only(top: 7),
+                  child: Icon(
+                    Icons.navigation_rounded,
+                    size: 22,
+                    color: color,
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Container(
+            width: 6,
+            height: 6,
+            decoration: const BoxDecoration(
+              shape: BoxShape.circle,
+              color: Colors.white,
+            ),
+          ),
+        ],
       ),
     );
   }
