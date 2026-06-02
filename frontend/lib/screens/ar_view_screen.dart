@@ -378,10 +378,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
     }
 
     final tint = _profileTint(profile);
-    final exposure = profile.suggestedExposureGain.clamp(0.78, 1.45).toDouble();
-    final emissiveLift = profile.suggestedEmissiveLift
-        .clamp(0.0, 0.18)
-        .toDouble();
+    final exposure = _profileTextureExposure(profile);
+    final emissiveLift = _profileEmissiveLift(profile);
 
     for (var i = 0; i < materials.length; i += 1) {
       final material = Map<String, dynamic>.from(
@@ -489,9 +487,37 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   List<double> _profileTint(AssetRenderProfile profile) {
-    final r = profile.albedoMeanR;
-    final g = profile.albedoMeanG;
-    final b = profile.albedoMeanB;
+    final input = profile.inputColorProfile;
+    final targetR = input?.targetMeanR;
+    final targetG = input?.targetMeanG;
+    final targetB = input?.targetMeanB;
+    final modelR = profile.albedoMeanR;
+    final modelG = profile.albedoMeanG;
+    final modelB = profile.albedoMeanB;
+    if (targetR != null &&
+        targetG != null &&
+        targetB != null &&
+        modelR != null &&
+        modelG != null &&
+        modelB != null) {
+      final roomTint = _roomTemperatureTint();
+      double channel(double target, double model, double room) {
+        final ratio = (target.clamp(0.02, 1.0) / model.clamp(0.02, 1.0))
+            .clamp(0.45, 2.3)
+            .toDouble();
+        return (math.pow(ratio, 0.55) * room).clamp(0.72, 1.38).toDouble();
+      }
+
+      return [
+        channel(targetR, modelR, roomTint[0]),
+        channel(targetG, modelG, roomTint[1]),
+        channel(targetB, modelB, roomTint[2]),
+      ];
+    }
+
+    final r = targetR ?? profile.albedoMeanR;
+    final g = targetG ?? profile.albedoMeanG;
+    final b = targetB ?? profile.albedoMeanB;
     if (r == null || g == null || b == null) {
       return _roomTemperatureTint();
     }
@@ -508,6 +534,38 @@ class _ArViewScreenState extends State<ArViewScreen> {
       channel(g, roomTint[1]),
       channel(b, roomTint[2]),
     ];
+  }
+
+  double _profileTextureExposure(AssetRenderProfile profile) {
+    final input = profile.inputColorProfile;
+    final targetLuma =
+        input?.processedLuminanceMean ??
+        input?.targetLuminance ??
+        input?.originalLuminanceMean ??
+        0.56;
+    final modelLuma = profile.textureLuminanceMean;
+    final textureGain = modelLuma == null || modelLuma <= 0.03
+        ? 1.0
+        : (targetLuma / modelLuma).clamp(0.65, 2.05).toDouble();
+    final preprocessGain = 1 + ((input?.exposureGain ?? 1.0) - 1) * 0.42;
+    final baselineGain = math.max(
+      profile.suggestedExposureGain,
+      math.max(textureGain, preprocessGain),
+    );
+    return baselineGain.clamp(0.76, 1.95).toDouble();
+  }
+
+  double _profileEmissiveLift(AssetRenderProfile profile) {
+    final input = profile.inputColorProfile;
+    final targetLuma =
+        input?.processedLuminanceMean ??
+        input?.targetLuminance ??
+        input?.originalLuminanceMean ??
+        0.50;
+    final modelLuma = profile.textureLuminanceMean ?? targetLuma;
+    final missing = (targetLuma - modelLuma).clamp(0.0, 1.0).toDouble();
+    final lift = math.max(profile.suggestedEmissiveLift, missing * 0.32);
+    return lift.clamp(0.0, 0.28).toDouble();
   }
 
   List<double> _roomTemperatureTint() {
@@ -776,8 +834,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
   double _profileLightingGain() {
     final profile = _activeRenderProfile;
     if (profile == null) return 1.0;
-    final gain = profile.suggestedExposureGain;
-    return (1 + (gain - 1) * 0.34).clamp(0.86, 1.24).toDouble();
+    final gain = _profileTextureExposure(profile);
+    return (1 + (gain - 1) * 0.48).clamp(0.84, 1.38).toDouble();
   }
 
   Future<void> _syncLightingWithRoom() async {

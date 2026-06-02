@@ -67,6 +67,93 @@ class GenerationJob {
   );
 }
 
+class SourceColorProfile {
+  final String? sourceProfileId;
+  final double? originalMeanR;
+  final double? originalMeanG;
+  final double? originalMeanB;
+  final double? originalLuminanceMean;
+  final double? originalSaturationMean;
+  final double? processedMeanR;
+  final double? processedMeanG;
+  final double? processedMeanB;
+  final double? processedLuminanceMean;
+  final double? processedSaturationMean;
+  final double? targetLuminance;
+  final double? exposureGain;
+  final double? gamma;
+  final double? saturationGain;
+  final double? contrastGain;
+  final double? redGain;
+  final double? greenGain;
+  final double? blueGain;
+
+  const SourceColorProfile({
+    this.sourceProfileId,
+    this.originalMeanR,
+    this.originalMeanG,
+    this.originalMeanB,
+    this.originalLuminanceMean,
+    this.originalSaturationMean,
+    this.processedMeanR,
+    this.processedMeanG,
+    this.processedMeanB,
+    this.processedLuminanceMean,
+    this.processedSaturationMean,
+    this.targetLuminance,
+    this.exposureGain,
+    this.gamma,
+    this.saturationGain,
+    this.contrastGain,
+    this.redGain,
+    this.greenGain,
+    this.blueGain,
+  });
+
+  factory SourceColorProfile.fromJson(Map<String, dynamic> json) {
+    double? asDouble(String key) {
+      final value = json[key];
+      if (value == null) return null;
+      if (value is num) return value.toDouble();
+      return double.tryParse(value.toString());
+    }
+
+    return SourceColorProfile(
+      sourceProfileId: json['sourceProfileId'] as String?,
+      originalMeanR: asDouble('originalMeanR'),
+      originalMeanG: asDouble('originalMeanG'),
+      originalMeanB: asDouble('originalMeanB'),
+      originalLuminanceMean: asDouble('originalLuminanceMean'),
+      originalSaturationMean: asDouble('originalSaturationMean'),
+      processedMeanR: asDouble('processedMeanR'),
+      processedMeanG: asDouble('processedMeanG'),
+      processedMeanB: asDouble('processedMeanB'),
+      processedLuminanceMean: asDouble('processedLuminanceMean'),
+      processedSaturationMean: asDouble('processedSaturationMean'),
+      targetLuminance: asDouble('targetLuminance'),
+      exposureGain: asDouble('exposureGain'),
+      gamma: asDouble('gamma'),
+      saturationGain: asDouble('saturationGain'),
+      contrastGain: asDouble('contrastGain'),
+      redGain: asDouble('redGain'),
+      greenGain: asDouble('greenGain'),
+      blueGain: asDouble('blueGain'),
+    );
+  }
+
+  double? get targetMeanR => processedMeanR ?? originalMeanR;
+  double? get targetMeanG => processedMeanG ?? originalMeanG;
+  double? get targetMeanB => processedMeanB ?? originalMeanB;
+
+  bool get hasColorBaseline =>
+      targetMeanR != null && targetMeanG != null && targetMeanB != null;
+
+  bool get needsColorLift =>
+      (exposureGain ?? 1.0) > 1.05 ||
+      (processedLuminanceMean ?? originalLuminanceMean ?? 1.0) <
+          (targetLuminance ?? 0.52) - 0.04;
+}
+
 class AssetRenderProfile {
   final int profileVersion;
   final String source;
@@ -87,6 +174,7 @@ class AssetRenderProfile {
   final int materialCount;
   final int textureCount;
   final String? notes;
+  final SourceColorProfile? inputColorProfile;
 
   const AssetRenderProfile({
     required this.profileVersion,
@@ -108,6 +196,7 @@ class AssetRenderProfile {
     this.roughnessMean,
     this.metallicMean,
     this.notes,
+    this.inputColorProfile,
   });
 
   factory AssetRenderProfile.fromJson(Map<String, dynamic> json) {
@@ -127,6 +216,7 @@ class AssetRenderProfile {
 
     bool asBool(String key) => json[key] == true;
 
+    final inputColorJson = json['inputColorProfile'];
     return AssetRenderProfile(
       profileVersion: asInt('profileVersion'),
       source: (json['source'] ?? 'fallback').toString(),
@@ -147,11 +237,16 @@ class AssetRenderProfile {
       materialCount: asInt('materialCount'),
       textureCount: asInt('textureCount'),
       notes: json['notes'] as String?,
+      inputColorProfile: inputColorJson is Map<String, dynamic>
+          ? SourceColorProfile.fromJson(inputColorJson)
+          : null,
     );
   }
 
   bool get needsColorLift =>
-      suggestedExposureGain > 1.08 || suggestedEmissiveLift > 0.02;
+      suggestedExposureGain > 1.08 ||
+      suggestedEmissiveLift > 0.02 ||
+      (inputColorProfile?.needsColorLift ?? false);
 }
 
 class FurnitureAsset {
