@@ -67,6 +67,93 @@ class GenerationJob {
   );
 }
 
+class AssetRenderProfile {
+  final int profileVersion;
+  final String source;
+  final double? albedoMeanR;
+  final double? albedoMeanG;
+  final double? albedoMeanB;
+  final double? textureLuminanceMean;
+  final double? textureSaturationMean;
+  final double? roughnessMean;
+  final double? metallicMean;
+  final double suggestedExposureGain;
+  final double suggestedEmissiveLift;
+  final bool hasEmbeddedTextures;
+  final bool hasExternalTextures;
+  final bool hasNormalMap;
+  final bool hasOcclusionMap;
+  final bool hasEmissive;
+  final int materialCount;
+  final int textureCount;
+  final String? notes;
+
+  const AssetRenderProfile({
+    required this.profileVersion,
+    required this.source,
+    required this.suggestedExposureGain,
+    required this.suggestedEmissiveLift,
+    required this.hasEmbeddedTextures,
+    required this.hasExternalTextures,
+    required this.hasNormalMap,
+    required this.hasOcclusionMap,
+    required this.hasEmissive,
+    required this.materialCount,
+    required this.textureCount,
+    this.albedoMeanR,
+    this.albedoMeanG,
+    this.albedoMeanB,
+    this.textureLuminanceMean,
+    this.textureSaturationMean,
+    this.roughnessMean,
+    this.metallicMean,
+    this.notes,
+  });
+
+  factory AssetRenderProfile.fromJson(Map<String, dynamic> json) {
+    double? asDouble(String key) {
+      final value = json[key];
+      if (value == null) return null;
+      if (value is num) return value.toDouble();
+      return double.tryParse(value.toString());
+    }
+
+    int asInt(String key) {
+      final value = json[key];
+      if (value is int) return value;
+      if (value is num) return value.toInt();
+      return int.tryParse(value?.toString() ?? '') ?? 0;
+    }
+
+    bool asBool(String key) => json[key] == true;
+
+    return AssetRenderProfile(
+      profileVersion: asInt('profileVersion'),
+      source: (json['source'] ?? 'fallback').toString(),
+      albedoMeanR: asDouble('albedoMeanR'),
+      albedoMeanG: asDouble('albedoMeanG'),
+      albedoMeanB: asDouble('albedoMeanB'),
+      textureLuminanceMean: asDouble('textureLuminanceMean'),
+      textureSaturationMean: asDouble('textureSaturationMean'),
+      roughnessMean: asDouble('roughnessMean'),
+      metallicMean: asDouble('metallicMean'),
+      suggestedExposureGain: asDouble('suggestedExposureGain') ?? 1.0,
+      suggestedEmissiveLift: asDouble('suggestedEmissiveLift') ?? 0.0,
+      hasEmbeddedTextures: asBool('hasEmbeddedTextures'),
+      hasExternalTextures: asBool('hasExternalTextures'),
+      hasNormalMap: asBool('hasNormalMap'),
+      hasOcclusionMap: asBool('hasOcclusionMap'),
+      hasEmissive: asBool('hasEmissive'),
+      materialCount: asInt('materialCount'),
+      textureCount: asInt('textureCount'),
+      notes: json['notes'] as String?,
+    );
+  }
+
+  bool get needsColorLift =>
+      suggestedExposureGain > 1.08 || suggestedEmissiveLift > 0.02;
+}
+
 class FurnitureAsset {
   final String assetId;
   final String generationJobId;
@@ -78,6 +165,7 @@ class FurnitureAsset {
   final String modelS3Bucket;
   final String modelS3Key;
   final DateTime? createdAt;
+  final AssetRenderProfile? renderProfile;
 
   const FurnitureAsset({
     required this.assetId,
@@ -90,6 +178,7 @@ class FurnitureAsset {
     this.heightCm,
     this.depthCm,
     this.createdAt,
+    this.renderProfile,
   });
 
   factory FurnitureAsset.fromJson(Map<String, dynamic> json) {
@@ -100,6 +189,7 @@ class FurnitureAsset {
       return double.tryParse(value.toString());
     }
 
+    final profileJson = json['renderProfile'];
     return FurnitureAsset(
       assetId: json['assetId'] as String,
       generationJobId: json['generationJobId'] as String,
@@ -111,6 +201,9 @@ class FurnitureAsset {
       modelS3Bucket: json['modelS3Bucket'] as String,
       modelS3Key: json['modelS3Key'] as String,
       createdAt: DateTime.tryParse((json['createdAt'] ?? '').toString()),
+      renderProfile: profileJson is Map<String, dynamic>
+          ? AssetRenderProfile.fromJson(profileJson)
+          : null,
     );
   }
 
@@ -253,6 +346,16 @@ class ApiClient extends ChangeNotifier {
   Future<String> getModelUrl(String assetId) async {
     final json = await _getJson('/furniture-assets/$assetId/model-url');
     return json['modelUrl'] as String;
+  }
+
+  Future<AssetRenderProfile?> getAssetRenderProfile(String assetId) async {
+    try {
+      final json = await _getJson('/furniture-assets/$assetId/render-profile');
+      return AssetRenderProfile.fromJson(json);
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) return null;
+      rethrow;
+    }
   }
 
   Future<void> _saveAuth(

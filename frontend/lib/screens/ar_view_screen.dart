@@ -85,6 +85,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
   bool get _planeDetected => _planeAnchorIds.isNotEmpty;
 
+  AssetRenderProfile? get _activeRenderProfile =>
+      _selectedModel?.asset.renderProfile ?? _activeAsset?.renderProfile;
+
   _PlacedModel? get _selectedModel {
     final nodeName = _selectedNodeName;
     if (nodeName == null) return null;
@@ -105,6 +108,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
         category: 'furniture',
         dimensions: widget.dimensions ?? '크기 미입력',
         modelUrl: url,
+        renderProfile: null,
       );
       _activeAsset = asset;
       _prepareAsset(asset);
@@ -147,17 +151,28 @@ class _ArViewScreenState extends State<ArViewScreen> {
     });
 
     try {
-      final url = await context.read<ApiClient>().getModelUrl(asset.assetId);
+      final api = context.read<ApiClient>();
+      final url = await api.getModelUrl(asset.assetId);
+      var renderProfile = asset.renderProfile;
+      if (renderProfile == null) {
+        try {
+          renderProfile = await api.getAssetRenderProfile(asset.assetId);
+        } catch (e) {
+          debugPrint('[AR] render profile fetch skipped: $e');
+        }
+      }
       final arAsset = _ArAsset(
         id: asset.assetId,
         name: asset.displayName,
         category: asset.displayCategory,
         dimensions: asset.dimensions,
         modelUrl: url,
+        renderProfile: renderProfile,
       );
       if (!mounted) return;
       setState(() => _activeAsset = arAsset);
       await _prepareAsset(arAsset);
+      unawaited(_syncLightingWithRoom());
     } catch (e) {
       if (!mounted) return;
       setState(() => _downloadError = '모델 URL을 가져오지 못했어요: $e');
@@ -199,27 +214,35 @@ class _ArViewScreenState extends State<ArViewScreen> {
         await file.writeAsBytes(response.bodyBytes);
       }
 
+      final renderFileName = 'ar_render_${asset.id.hashCode.abs()}.glb';
+      final renderFile = File('${dir.path}/$renderFileName');
+      await _writeRenderableGlb(
+        sourceFile: file,
+        targetFile: renderFile,
+        profile: asset.renderProfile,
+      );
+
       final previewValidFileName =
           'ar_preview_gray_${asset.id.hashCode.abs()}.glb';
       final previewInvalidFileName =
           'ar_preview_red_${asset.id.hashCode.abs()}.glb';
       await _writePreviewGlb(
-        sourceFile: file,
+        sourceFile: renderFile,
         targetFile: File('${dir.path}/$previewValidFileName'),
         rgba: const [0.62, 0.62, 0.62, 0.34],
       );
       await _writePreviewGlb(
-        sourceFile: file,
+        sourceFile: renderFile,
         targetFile: File('${dir.path}/$previewInvalidFileName'),
         rgba: const [1.0, 0.12, 0.08, 0.42],
       );
 
-      final calibration = await _inspectModelFile(file, asset.dimensions);
+      final calibration = await _inspectModelFile(renderFile, asset.dimensions);
       if (!mounted) return;
       setState(() {
         _preparedModels[asset.id] = _PreparedModel(
           asset: asset,
-          localGlbPath: fileName,
+          localGlbPath: renderFileName,
           previewValidGlbPath: previewValidFileName,
           previewInvalidGlbPath: previewInvalidFileName,
           scale: calibration.scale,
@@ -317,6 +340,183 @@ class _ArViewScreenState extends State<ArViewScreen> {
       ..add(paddedJson)
       ..add(trailingChunks);
     await targetFile.writeAsBytes(output.takeBytes(), flush: true);
+  }
+
+  Future<void> _writeRenderableGlb({
+    required File sourceFile,
+    required File targetFile,
+    required AssetRenderProfile? profile,
+  }) async {
+    if (profile == null) {
+      await sourceFile.copy(targetFile.path);
+      return;
+    }
+
+    final bytes = await sourceFile.readAsBytes();
+    if (bytes.length < 20) {
+      await sourceFile.copy(targetFile.path);
+      return;
+    }
+
+    final data = ByteData.view(bytes.buffer, bytes.offsetInBytes, bytes.length);
+    final magic = data.getUint32(0, Endian.little);
+    final version = data.getUint32(4, Endian.little);
+    final jsonChunkLength = data.getUint32(12, Endian.little);
+    final jsonChunkType = data.getUint32(16, Endian.little);
+    if (magic != 0x46546C67 || jsonChunkType != 0x4E4F534A) {
+      await sourceFile.copy(targetFile.path);
+      return;
+    }
+
+    final jsonBytes = bytes.sublist(20, 20 + jsonChunkLength);
+    final gltf = jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
+    final materials = (gltf['materials'] as List<dynamic>?) ?? <dynamic>[];
+    if (materials.isEmpty) {
+      materials.add(<String, dynamic>{});
+      gltf['materials'] = materials;
+      _assignDefaultMaterialToPrimitives(gltf);
+    }
+
+    final tint = _profileTint(profile);
+    final exposure = profile.suggestedExposureGain.clamp(0.78, 1.45).toDouble();
+    final emissiveLift = profile.suggestedEmissiveLift
+        .clamp(0.0, 0.18)
+        .toDouble();
+
+    for (var i = 0; i < materials.length; i += 1) {
+      final material = Map<String, dynamic>.from(
+        (materials[i] as Map?) ?? const <String, dynamic>{},
+      );
+      final pbr = Map<String, dynamic>.from(
+        (material['pbrMetallicRoughness'] as Map?) ?? const <String, dynamic>{},
+      );
+      final base = _baseColorFactor(pbr['baseColorFactor']);
+      final adjustedBase = <double>[
+        (base[0] * exposure * tint[0]).clamp(0.0, 1.0).toDouble(),
+        (base[1] * exposure * tint[1]).clamp(0.0, 1.0).toDouble(),
+        (base[2] * exposure * tint[2]).clamp(0.0, 1.0).toDouble(),
+        base[3].clamp(0.0, 1.0).toDouble(),
+      ];
+      pbr['baseColorFactor'] = adjustedBase;
+
+      if (!pbr.containsKey('metallicFactor') &&
+          (profile.metallicMean ?? 0.0) < 0.15) {
+        pbr['metallicFactor'] = 0.0;
+      }
+      if (!pbr.containsKey('roughnessFactor')) {
+        final roughness = (profile.roughnessMean ?? 0.82)
+            .clamp(0.55, 0.95)
+            .toDouble();
+        pbr['roughnessFactor'] = roughness;
+      }
+
+      material['pbrMetallicRoughness'] = pbr;
+      material['doubleSided'] = material['doubleSided'] ?? true;
+
+      if (emissiveLift > 0) {
+        final existing = _rgbFactor(material['emissiveFactor']);
+        material['emissiveFactor'] = <double>[
+          (existing[0] + emissiveLift * tint[0]).clamp(0.0, 0.35).toDouble(),
+          (existing[1] + emissiveLift * tint[1]).clamp(0.0, 0.35).toDouble(),
+          (existing[2] + emissiveLift * tint[2]).clamp(0.0, 0.35).toDouble(),
+        ];
+      }
+
+      materials[i] = material;
+    }
+
+    final encodedJson = utf8.encode(jsonEncode(gltf));
+    final paddedJsonLength = _paddedLength(encodedJson.length);
+    final paddedJson = Uint8List(paddedJsonLength)
+      ..setRange(0, encodedJson.length, encodedJson);
+    for (var i = encodedJson.length; i < paddedJson.length; i += 1) {
+      paddedJson[i] = 0x20;
+    }
+
+    final trailingChunks = bytes.sublist(20 + jsonChunkLength);
+    final totalLength = 12 + 8 + paddedJson.length + trailingChunks.length;
+    final output = BytesBuilder(copy: false);
+    final header = ByteData(12)
+      ..setUint32(0, magic, Endian.little)
+      ..setUint32(4, version, Endian.little)
+      ..setUint32(8, totalLength, Endian.little);
+    final jsonHeader = ByteData(8)
+      ..setUint32(0, paddedJson.length, Endian.little)
+      ..setUint32(4, 0x4E4F534A, Endian.little);
+
+    output
+      ..add(header.buffer.asUint8List())
+      ..add(jsonHeader.buffer.asUint8List())
+      ..add(paddedJson)
+      ..add(trailingChunks);
+    await targetFile.writeAsBytes(output.takeBytes(), flush: true);
+  }
+
+  void _assignDefaultMaterialToPrimitives(Map<String, dynamic> gltf) {
+    final meshes = gltf['meshes'] as List<dynamic>?;
+    if (meshes == null) return;
+    for (final mesh in meshes) {
+      final primitives =
+          (mesh as Map<String, dynamic>)['primitives'] as List<dynamic>?;
+      if (primitives == null) continue;
+      for (final primitive in primitives) {
+        (primitive as Map<String, dynamic>)['material'] = 0;
+      }
+    }
+  }
+
+  List<double> _baseColorFactor(Object? raw) {
+    if (raw is List && raw.length >= 4) {
+      return [
+        (raw[0] as num?)?.toDouble() ?? 1.0,
+        (raw[1] as num?)?.toDouble() ?? 1.0,
+        (raw[2] as num?)?.toDouble() ?? 1.0,
+        (raw[3] as num?)?.toDouble() ?? 1.0,
+      ];
+    }
+    return const [1.0, 1.0, 1.0, 1.0];
+  }
+
+  List<double> _rgbFactor(Object? raw) {
+    if (raw is List && raw.length >= 3) {
+      return [
+        (raw[0] as num?)?.toDouble() ?? 0.0,
+        (raw[1] as num?)?.toDouble() ?? 0.0,
+        (raw[2] as num?)?.toDouble() ?? 0.0,
+      ];
+    }
+    return const [0.0, 0.0, 0.0];
+  }
+
+  List<double> _profileTint(AssetRenderProfile profile) {
+    final r = profile.albedoMeanR;
+    final g = profile.albedoMeanG;
+    final b = profile.albedoMeanB;
+    if (r == null || g == null || b == null) {
+      return _roomTemperatureTint();
+    }
+
+    final mean = ((r + g + b) / 3).clamp(0.001, 1.0).toDouble();
+    final roomTint = _roomTemperatureTint();
+    double channel(double value, double room) {
+      final albedoBias = 1 + ((value / mean) - 1) * 0.08;
+      return (albedoBias * room).clamp(0.9, 1.1).toDouble();
+    }
+
+    return [
+      channel(r, roomTint[0]),
+      channel(g, roomTint[1]),
+      channel(b, roomTint[2]),
+    ];
+  }
+
+  List<double> _roomTemperatureTint() {
+    final warmth = ((6500 - _ambientTemperature) / 3500).clamp(-1.0, 1.0);
+    return [
+      (1 + warmth * 0.045).clamp(0.92, 1.08).toDouble(),
+      1.0,
+      (1 - warmth * 0.045).clamp(0.92, 1.08).toDouble(),
+    ];
   }
 
   int _paddedLength(int length) => (length + 3) & ~3;
@@ -558,7 +758,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
     light: ARKitLight(
       type: ARKitLightType.ambient,
       temperature: _ambientTemperature,
-      intensity: _ambientIntensity * 0.6,
+      intensity: _ambientIntensity * 0.62 * _profileLightingGain(),
     ),
   );
 
@@ -567,11 +767,18 @@ class _ArViewScreenState extends State<ArViewScreen> {
     light: ARKitLight(
       type: ARKitLightType.directional,
       temperature: _ambientTemperature,
-      intensity: _ambientIntensity * 0.5,
+      intensity: _ambientIntensity * 0.48 * _profileLightingGain(),
     ),
     // Aim the directional light down and slightly forward, like a ceiling lamp.
     eulerAngles: vector.Vector3(-1.05, -0.45, 0),
   );
+
+  double _profileLightingGain() {
+    final profile = _activeRenderProfile;
+    if (profile == null) return 1.0;
+    final gain = profile.suggestedExposureGain;
+    return (1 + (gain - 1) * 0.34).clamp(0.86, 1.24).toDouble();
+  }
 
   Future<void> _syncLightingWithRoom() async {
     final controller = _arkitController;
@@ -628,7 +835,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
     return (x: (maxX - minX) / 2, z: (maxZ - minZ) / 2);
   }
 
-  String _shadowNodeName(_PlacedModel model) => '${model.nodeName}$_shadowSuffix';
+  String _shadowNodeName(_PlacedModel model) =>
+      '${model.nodeName}$_shadowSuffix';
 
   /// A flat, dark, translucent ellipse sized to the model's footprint. Using a
   /// solid color (rather than a texture) keeps it reliable across devices while
@@ -674,7 +882,10 @@ class _ArViewScreenState extends State<ArViewScreen> {
     final controller = _arkitController;
     if (controller == null) return;
     try {
-      await controller.update(_shadowNodeName(model), node: _shadowNodeFor(model));
+      await controller.update(
+        _shadowNodeName(model),
+        node: _shadowNodeFor(model),
+      );
     } catch (_) {
       await _addShadow(model);
     }
@@ -1051,9 +1262,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
   }
 
   vector.Matrix4 _orientationMatrixForModel(_PlacedModel model) {
-    return _userRotationMatrix(model).multiplied(
-      _baseRotationMatrix(model.baseRotation),
-    );
+    return _userRotationMatrix(
+      model,
+    ).multiplied(_baseRotationMatrix(model.baseRotation));
   }
 
   /// Heading (yaw, about world up) combined with a free-form lean. The lean is
@@ -1264,9 +1475,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.card,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(18),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
         title: Text(
           '전체 삭제',
           style: GoogleFonts.nunito(
@@ -1328,7 +1537,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
         : _ambientTemperature < 6200
         ? '중간'
         : '시원함';
-    return '$brightness · $warmth';
+    final profile = _activeRenderProfile;
+    final correction = profile != null && profile.needsColorLift ? '색보정' : null;
+    return correction == null
+        ? '$brightness · $warmth'
+        : '$brightness · $warmth · $correction';
   }
 
   Color _roomLightColor() {
@@ -1491,7 +1704,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
               isUpright: _selectedModel == null
                   ? true
                   : _isAlignedToGround(_selectedModel!),
-              isYawSnapped: _selectedModel != null && _isYawSnapped(_selectedModel!),
+              isYawSnapped:
+                  _selectedModel != null && _isYawSnapped(_selectedModel!),
               onPlace: _placeActiveModel,
               onRotateDrag: _rotateSelectedFromWheel,
               onRotateEnd: _onRotationGestureEnd,
@@ -1511,6 +1725,7 @@ class _ArAsset {
   final String category;
   final String dimensions;
   final String modelUrl;
+  final AssetRenderProfile? renderProfile;
 
   const _ArAsset({
     required this.id,
@@ -1518,6 +1733,7 @@ class _ArAsset {
     required this.category,
     required this.dimensions,
     required this.modelUrl,
+    required this.renderProfile,
   });
 }
 
@@ -2416,7 +2632,9 @@ class _RotationReadout extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.black.withValues(alpha: 0.52),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: color.withValues(alpha: aligned ? 0.85 : 0.35)),
+        border: Border.all(
+          color: color.withValues(alpha: aligned ? 0.85 : 0.35),
+        ),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
@@ -2435,7 +2653,9 @@ class _RotationReadout extends StatelessWidget {
           Container(width: 1, height: 14, color: Colors.white24),
           const SizedBox(width: 8),
           Icon(
-            isUpright ? Icons.check_circle_rounded : Icons.report_problem_rounded,
+            isUpright
+                ? Icons.check_circle_rounded
+                : Icons.report_problem_rounded,
             size: 14,
             color: color,
           ),
@@ -2502,11 +2722,7 @@ class _CompassDial extends StatelessWidget {
                 alignment: Alignment.topCenter,
                 child: Padding(
                   padding: const EdgeInsets.only(top: 7),
-                  child: Icon(
-                    Icons.navigation_rounded,
-                    size: 22,
-                    color: color,
-                  ),
+                  child: Icon(Icons.navigation_rounded, size: 22, color: color),
                 ),
               ),
             ),
