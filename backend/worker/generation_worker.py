@@ -267,7 +267,7 @@ def _download_hunyuan_view_images(job: dict) -> list[dict]:
         bucket = job.get(bucket_key)
         key = job.get(object_key)
         if not bucket or not key:
-            raise RuntimeError(f"Missing {view} source image for Hunyuan multiview job")
+            continue
         view_images.append(
             {
                 "source_image_id": str(job.get(f"source_{view}_image_id") or job["source_image_id"]),
@@ -275,6 +275,8 @@ def _download_hunyuan_view_images(job: dict) -> list[dict]:
                 "image": download_object_bytes(bucket=bucket, key=key),
             }
         )
+    if not view_images:
+        raise RuntimeError("Missing source images for Hunyuan multiview job")
     return view_images
 
 

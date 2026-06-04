@@ -12,41 +12,31 @@ def _base64_image(image_bytes: bytes) -> str:
     return base64.b64encode(image_bytes).decode("utf-8")
 
 
-CANONICAL_VIEWS = ("front", "back", "left", "right")
-
-
 def generate_multiview_model(view_images: Sequence[dict]) -> bytes:
     """Generate a GLB from multiview images using Hunyuan3D-2mv.
 
-    The GPU server accepts a `views` list so we can pass all uploaded images.
-    Internally, the current Hunyuan3D-2mv model still normalizes them to the
-    canonical front/back/left/right conditioning set it was trained to consume.
+    The GPU server accepts arbitrary uploaded views, selects the best canonical
+    front/back/left/right images, and can synthesize missing views before
+    calling the underlying Hunyuan3D-2mv model.
     """
-    canonical_images = {
-        item.get("view"): item.get("image")
-        for item in view_images
-        if item.get("view") in CANONICAL_VIEWS and item.get("image")
-    }
-    missing = [view for view in CANONICAL_VIEWS if not canonical_images.get(view)]
-    if missing:
-        raise RuntimeError(f"Hunyuan multiview generation requires: {', '.join(missing)}")
-
     payload = {
         "views": [
             {
+                "id": str(item.get("source_image_id") or item.get("id") or ""),
                 "view": str(item.get("view") or "unknown"),
                 "image": _base64_image(item["image"]),
                 "source_image_id": str(item.get("source_image_id") or ""),
+                "source": str(item.get("source") or "real"),
             }
             for item in view_images
             if item.get("image")
         ],
-        "front": _base64_image(canonical_images["front"]),
-        "back": _base64_image(canonical_images["back"]),
-        "left": _base64_image(canonical_images["left"]),
-        "right": _base64_image(canonical_images["right"]),
+        "auto_fill_missing_views": True,
         "remove_background": settings.hunyuan_remove_background,
         "texture": settings.hunyuan_texture,
+        "texture_use_delight": True,
+        "preserve_texture_color": True,
+        "texture_color_match_strength": 0.75,
         "file_type": "glb",
         "type": "glb",
         "seed": settings.hunyuan_seed,
@@ -57,6 +47,9 @@ def generate_multiview_model(view_images: Sequence[dict]) -> bytes:
         "face_count": settings.hunyuan_face_count,
         "target_face_num": settings.hunyuan_face_count,
     }
+    if not payload["views"]:
+        raise RuntimeError("Hunyuan multiview generation requires at least one source image")
+
     url = f"{settings.hunyuan_base_url.rstrip('/')}/generate"
     response = requests.post(
         url,

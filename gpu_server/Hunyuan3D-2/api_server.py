@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import base64
+import json
 import logging
 import logging.handlers
 import os
@@ -11,8 +12,9 @@ import threading
 import traceback
 import uuid
 from io import BytesIO
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
+import requests
 import torch
 import trimesh
 import uvicorn
@@ -115,10 +117,46 @@ class StreamToLogger:
 
 
 logger = build_logger("controller", f"{SAVE_DIR}/controller.log")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def load_local_env(env_path: str) -> None:
+    if not os.path.exists(env_path):
+        return
+
+    with open(env_path, "r", encoding="utf-8") as env_file:
+        for raw_line in env_file:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip("\"'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_local_env(os.path.join(SCRIPT_DIR, ".env"))
 
 
 def load_image_from_base64(image_b64: str) -> Image.Image:
     return Image.open(BytesIO(base64.b64decode(image_b64))).convert("RGBA")
+
+
+def encode_image_to_base64(image: Image.Image, image_format: str = "PNG") -> str:
+    buffer = BytesIO()
+    image.save(buffer, format=image_format)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
+def encode_image_jpeg_base64(image: Image.Image, max_size: int) -> str:
+    image = image.convert("RGBA")
+    image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+    background = Image.new("RGB", image.size, (255, 255, 255))
+    background.paste(image, mask=image.getchannel("A"))
+    buffer = BytesIO()
+    background.save(buffer, format="JPEG", quality=85, optimize=True)
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 CANONICAL_VIEWS = ("front", "back", "left", "right")
@@ -127,11 +165,316 @@ VIEW_ALIASES = {
     "front_right": ("front", "right"),
     "back_left": ("back", "left"),
     "back_right": ("back", "right"),
+    "left_front": ("front", "left"),
+    "right_front": ("front", "right"),
+    "left_back": ("back", "left"),
+    "right_back": ("back", "right"),
+    "side_left": ("left",),
+    "side_right": ("right",),
 }
+TEXTURE_VIEW_ORDER = ("front", "right", "back", "left")
+VIEW_SELECTOR_BASE_URL = os.getenv("VIEW_SELECTOR_BASE_URL", "").rstrip("/")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+CLAUDE_VIEW_SELECTOR_MODEL = os.getenv("CLAUDE_VIEW_SELECTOR_MODEL", "claude-3-5-haiku-20241022")
+CLAUDE_VIEW_SELECTOR_TIMEOUT_SECONDS = int(os.getenv("CLAUDE_VIEW_SELECTOR_TIMEOUT_SECONDS", "90"))
+CLAUDE_VIEW_SELECTOR_MAX_IMAGE_SIZE = int(os.getenv("CLAUDE_VIEW_SELECTOR_MAX_IMAGE_SIZE", "768"))
+MISSING_VIEW_BASE_URL = os.getenv("MISSING_VIEW_BASE_URL", "").rstrip("/")
+MISSING_VIEW_PROVIDER = os.getenv("MISSING_VIEW_PROVIDER", "era3d")
+MISSING_VIEW_TIMEOUT_SECONDS = int(os.getenv("MISSING_VIEW_TIMEOUT_SECONDS", "600"))
 
 
 def normalize_view_label(value: str) -> str:
     return str(value or "unknown").strip().lower().replace("-", "_")
+
+
+def parse_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "y", "on"}
+    return bool(value)
+
+
+def collect_texture_reference_images(image_input):
+    if not isinstance(image_input, dict):
+        return image_input
+
+    texture_images = [
+        image_input[view]
+        for view in TEXTURE_VIEW_ORDER
+        if image_input.get(view) is not None
+    ]
+    if not texture_images:
+        raise ValueError("No texture reference image provided.")
+    return texture_images
+
+
+def _candidate_score(candidate: dict, canonical_view: str) -> tuple[float, int, int]:
+    view_label = candidate.get("view_label", "unknown")
+    confidence = float(candidate.get("confidence", 0.5))
+    quality = float(candidate.get("quality", 0.5))
+    if view_label == canonical_view:
+        label_score = 2.0
+    elif canonical_view in VIEW_ALIASES.get(view_label, ()):
+        label_score = 1.0
+    else:
+        label_score = 0.0
+    return (label_score + confidence + quality, int(candidate.get("is_exact", False)), -candidate["order"])
+
+
+def _extract_response_text(result: dict) -> str:
+    if result.get("output_text"):
+        return str(result["output_text"])
+
+    chunks = []
+    for content in result.get("content", []):
+        if content.get("type") == "text" and content.get("text"):
+            chunks.append(str(content["text"]))
+
+    for item in result.get("output", []):
+        for content in item.get("content", []):
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                chunks.append(str(content["text"]))
+    return "\n".join(chunks)
+
+
+def _parse_json_object(text: str) -> dict:
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        if cleaned.lower().startswith("json"):
+            cleaned = cleaned[4:].strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        start = cleaned.find("{")
+        end = cleaned.rfind("}")
+        if start >= 0 and end > start:
+            return json.loads(cleaned[start : end + 1])
+        raise
+
+
+def _apply_claude_view_selector(candidates: list[dict]) -> bool:
+    if not ANTHROPIC_API_KEY:
+        return False
+
+    content = [
+        {
+            "type": "text",
+            "text": (
+                "Classify each furniture image by camera viewpoint. "
+                "Allowed views: front, back, left, right, front_left, front_right, "
+                "back_left, back_right, detail, unknown. "
+                "Use the user-provided hint only as weak context; inspect the image itself. "
+                "Return strict JSON only with this shape: "
+                "{\"images\":[{\"id\":\"...\",\"view\":\"front|back|left|right|front_left|front_right|back_left|back_right|detail|unknown\","
+                "\"confidence\":0.0,\"quality\":0.0,\"reason\":\"short\"}]}. "
+                "confidence means viewpoint certainty. quality means usefulness for 3D reconstruction."
+            ),
+        }
+    ]
+
+    for candidate in candidates:
+        content.append(
+            {
+                "type": "text",
+                "text": f"image id={candidate['id']}, user_hint={candidate.get('view_label', 'unknown')}",
+            }
+        )
+        content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": encode_image_jpeg_base64(candidate["image"], CLAUDE_VIEW_SELECTOR_MAX_IMAGE_SIZE),
+                },
+            }
+        )
+
+    response = requests.post(
+        "https://api.anthropic.com/v1/messages",
+        headers={
+            "x-api-key": ANTHROPIC_API_KEY,
+            "anthropic-version": "2023-06-01",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": CLAUDE_VIEW_SELECTOR_MODEL,
+            "max_tokens": 1200,
+            "temperature": 0,
+            "messages": [{"role": "user", "content": content}],
+        },
+        timeout=CLAUDE_VIEW_SELECTOR_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    result = _parse_json_object(_extract_response_text(response.json()))
+
+    by_id = {candidate["id"]: candidate for candidate in candidates}
+    updated = False
+    for item in result.get("images", []):
+        candidate = by_id.get(str(item.get("id")))
+        if not candidate:
+            continue
+        candidate["view_label"] = normalize_view_label(item.get("view", candidate["view_label"]))
+        candidate["confidence"] = float(item.get("confidence", candidate.get("confidence", 0.5)))
+        candidate["quality"] = float(item.get("quality", candidate.get("quality", 0.5)))
+        candidate["ai_reason"] = str(item.get("reason", ""))
+        candidate["ai_provider"] = "claude"
+        updated = True
+
+    if updated:
+        logger.info(
+            "Claude view selector assignment: %s",
+            {
+                candidate["id"]: {
+                    "view": candidate.get("view_label"),
+                    "confidence": candidate.get("confidence"),
+                    "quality": candidate.get("quality"),
+                    "reason": candidate.get("ai_reason", ""),
+                }
+                for candidate in candidates
+            },
+        )
+    return updated
+
+
+def _apply_view_selector(candidates: list[dict]) -> None:
+    if _apply_claude_view_selector(candidates):
+        return
+
+    if not VIEW_SELECTOR_BASE_URL:
+        return
+
+    payload = {
+        "views": [
+            {
+                "id": candidate["id"],
+                "view": candidate["view_label"],
+                "image": encode_image_to_base64(candidate["image"]),
+            }
+            for candidate in candidates
+        ],
+        "target_views": list(CANONICAL_VIEWS),
+    }
+    response = requests.post(
+        f"{VIEW_SELECTOR_BASE_URL}/select-views",
+        json=payload,
+        timeout=120,
+    )
+    response.raise_for_status()
+    result = response.json()
+
+    images = result.get("images", [])
+    by_id = {candidate["id"]: candidate for candidate in candidates}
+    for item in images:
+        candidate = by_id.get(str(item.get("id")))
+        if not candidate:
+            continue
+        candidate["view_label"] = normalize_view_label(item.get("view", candidate["view_label"]))
+        candidate["confidence"] = float(item.get("confidence", candidate.get("confidence", 0.5)))
+        candidate["quality"] = float(item.get("quality", candidate.get("quality", 0.5)))
+
+
+def _select_canonical_images(candidates: list[dict]) -> dict[str, dict]:
+    selected: dict[str, dict] = {}
+    used_ids: set[str] = set()
+
+    for view in CANONICAL_VIEWS:
+        view_candidates = [
+            candidate
+            for candidate in candidates
+            if candidate["id"] not in used_ids
+            and (
+                candidate.get("view_label") == view
+                or view in VIEW_ALIASES.get(candidate.get("view_label", "unknown"), ())
+            )
+        ]
+        if not view_candidates:
+            continue
+        best = max(view_candidates, key=lambda candidate: _candidate_score(candidate, view))
+        selected[view] = best
+        used_ids.add(best["id"])
+
+    return selected
+
+
+def _generate_missing_view(target_view: str, selected: dict[str, dict]) -> Optional[Image.Image]:
+    if not MISSING_VIEW_BASE_URL:
+        return None
+    if not selected:
+        raise ValueError(f"Cannot generate missing view '{target_view}' without any reference image.")
+
+    reference_view, reference_candidate = next(iter(selected.items()))
+    payload = {
+        "provider": MISSING_VIEW_PROVIDER,
+        "target_view": target_view,
+        "reference_view": reference_view,
+        "reference_image": encode_image_to_base64(reference_candidate["image"]),
+        "available_views": [
+            {
+                "view": view,
+                "source": candidate.get("source", "real"),
+                "image": encode_image_to_base64(candidate["image"]),
+            }
+            for view, candidate in selected.items()
+        ],
+    }
+    response = requests.post(
+        f"{MISSING_VIEW_BASE_URL}/generate-view",
+        json=payload,
+        timeout=MISSING_VIEW_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+
+    content_type = response.headers.get("content-type", "")
+    if "application/json" in content_type:
+        generated_b64 = response.json().get("image")
+        if not generated_b64:
+            raise ValueError(f"Missing-view API did not return an image for '{target_view}'.")
+        return load_image_from_base64(generated_b64)
+
+    return Image.open(BytesIO(response.content)).convert("RGBA")
+
+
+def _fill_missing_canonical_views(
+    selected: dict[str, dict],
+    auto_fill_missing_views: bool,
+) -> dict[str, dict]:
+    missing = [view for view in CANONICAL_VIEWS if view not in selected]
+    if not missing:
+        return selected
+    if not auto_fill_missing_views:
+        raise ValueError(
+            "Hunyuan multiview generation requires canonical views: "
+            f"{', '.join(missing)}"
+        )
+
+    for view in missing:
+        generated = _generate_missing_view(view, selected)
+        if generated is None:
+            logger.info(
+                "Missing canonical view '%s' will be inferred by Hunyuan3D-2mv from provided views.",
+                view,
+            )
+            continue
+        selected[view] = {
+            "id": f"generated_{view}",
+            "image": generated,
+            "view_label": view,
+            "source": "generated",
+            "confidence": 1.0,
+            "quality": 1.0,
+            "order": 10_000 + len(selected),
+            "is_exact": True,
+        }
+        logger.info("Generated missing canonical view via %s: %s", MISSING_VIEW_PROVIDER, view)
+
+    return selected
 
 
 class ModelWorker:
@@ -182,11 +525,12 @@ class ModelWorker:
 
     def _prepare_image_input(self, params: Dict[str, Any]):
         remove_background = params.get("remove_background", True)
+        auto_fill_missing_views = parse_bool(params.get("auto_fill_missing_views"), default=True)
 
         # General multiview input. We accept all uploaded images as candidates,
         # then collapse them into the canonical four views Hunyuan3D-2mv expects.
         if "views" in params and params.get("views"):
-            candidates = {view: [] for view in CANONICAL_VIEWS}
+            candidates = []
             unsupported_views = []
 
             for idx, item in enumerate(params["views"]):
@@ -200,41 +544,53 @@ class ModelWorker:
                     img = self.rembg(img)
 
                 candidate = {
+                    "id": str(item.get("id") or item.get("source_image_id") or f"image_{idx}"),
                     "image": img,
                     "is_exact": view_label in CANONICAL_VIEWS,
                     "order": idx,
                     "view_label": view_label,
+                    "source": str(item.get("source") or "real"),
+                    "confidence": float(item.get("confidence", 1.0 if view_label in CANONICAL_VIEWS else 0.5)),
+                    "quality": float(item.get("quality", 0.5)),
                 }
+                candidates.append(candidate)
 
-                if view_label in CANONICAL_VIEWS:
-                    candidates[view_label].append(candidate)
-                elif view_label in VIEW_ALIASES:
-                    for canonical_view in VIEW_ALIASES[view_label]:
-                        candidates[canonical_view].append(candidate)
-                else:
+                if view_label not in CANONICAL_VIEWS and view_label not in VIEW_ALIASES:
                     unsupported_views.append(view_label)
 
-            image_dict = {}
-            for view in CANONICAL_VIEWS:
-                view_candidates = sorted(
-                    candidates[view],
-                    key=lambda candidate: (not candidate["is_exact"], candidate["order"]),
-                )
-                if view_candidates:
-                    image_dict[view] = view_candidates[0]["image"]
+            if not candidates:
+                raise ValueError("No valid images were provided in `views`.")
 
-            missing = [view for view in CANONICAL_VIEWS if view not in image_dict]
-            if missing:
+            _apply_view_selector(candidates)
+            selected = _select_canonical_images(candidates)
+            selected = _fill_missing_canonical_views(selected, bool(auto_fill_missing_views))
+            image_dict = {
+                view: selected[view]["image"]
+                for view in CANONICAL_VIEWS
+                if view in selected
+            }
+            if not image_dict:
                 raise ValueError(
-                    "Hunyuan multiview generation requires canonical views: "
-                    f"{', '.join(missing)}"
+                    "No canonical front/back/left/right view could be selected from provided images."
                 )
 
             if unsupported_views:
                 logger.info(
-                    "Ignoring unsupported auxiliary view labels for shape generation: %s",
+                    "Unsupported auxiliary view labels were ignored unless the selector relabeled them: %s",
                     sorted(set(unsupported_views)),
                 )
+            logger.info(
+                "Canonical view assignment: %s",
+                {
+                    view: {
+                        "id": selected[view].get("id"),
+                        "source": selected[view].get("source", "real"),
+                        "view_label": selected[view].get("view_label"),
+                    }
+                    for view in CANONICAL_VIEWS
+                    if view in selected
+                },
+            )
 
             params.pop("views", None)
             for view in CANONICAL_VIEWS:
@@ -253,11 +609,12 @@ class ModelWorker:
             params["image"] = image
             return image
 
-        # Multiview input: front/back/left/right
-        if "front" in params and params.get("front"):
+        # Multiview input: front/back/left/right. Hunyuan3D-2mv accepts a
+        # subset of canonical views and infers unobserved sides during sampling.
+        if any(params.get(view) for view in CANONICAL_VIEWS):
             image_dict = {}
 
-            for view in ["front", "back", "left", "right"]:
+            for view in CANONICAL_VIEWS:
                 if params.get(view):
                     img = load_image_from_base64(params[view])
 
@@ -266,10 +623,7 @@ class ModelWorker:
 
                     image_dict[view] = img
 
-            if "front" not in image_dict:
-                raise ValueError("Front image is required for multiview generation.")
-
-            for view in ["front", "back", "left", "right"]:
+            for view in CANONICAL_VIEWS:
                 params.pop(view, None)
 
             params["image"] = image_dict
@@ -284,7 +638,7 @@ class ModelWorker:
         image = self._prepare_image_input(params)
 
         file_type = params.get("type", params.get("file_type", "glb"))
-        texture_enabled = params.get("texture", False)
+        texture_enabled = parse_bool(params.get("texture"), default=False)
         face_count = int(params.get("face_count", params.get("target_face_num", 1000000)))
 
         if "mesh" in params and params.get("mesh"):
@@ -329,10 +683,27 @@ class ModelWorker:
             mesh = DegenerateFaceRemover()(mesh)
             mesh = FaceReducer()(mesh, max_facenum=face_count)
 
-            texture_image = image["front"] if isinstance(image, dict) else image
+            texture_image = collect_texture_reference_images(image)
+            texture_image_count = len(texture_image) if isinstance(texture_image, list) else 1
+            texture_use_delight = parse_bool(params.get("texture_use_delight"), default=True)
+            preserve_texture_color = parse_bool(params.get("preserve_texture_color"), default=True)
+            texture_color_match_strength = float(params.get("texture_color_match_strength", 0.75))
 
-            logger.info("Starting texture pipeline...")
-            mesh = self.pipeline_tex(mesh, texture_image)
+            logger.info(
+                "Starting texture pipeline with %d reference image(s), "
+                "use_delight=%s, preserve_color=%s, color_strength=%.2f...",
+                texture_image_count,
+                texture_use_delight,
+                preserve_texture_color,
+                texture_color_match_strength,
+            )
+            mesh = self.pipeline_tex(
+                mesh,
+                texture_image,
+                use_delight=texture_use_delight,
+                preserve_color=preserve_texture_color,
+                color_match_strength=texture_color_match_strength,
+            )
             logger.info("Texture pipeline done.")
 
         with tempfile.NamedTemporaryFile(suffix=f".{file_type}", delete=False) as temp_file:

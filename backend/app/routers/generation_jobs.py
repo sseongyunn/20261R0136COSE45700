@@ -21,6 +21,12 @@ SUPPORTED_VIEW_LABELS = CANONICAL_VIEWS | {
     "front_right",
     "back_left",
     "back_right",
+    "left_front",
+    "right_front",
+    "left_back",
+    "right_back",
+    "side_left",
+    "side_right",
     "top",
     "bottom",
     "detail",
@@ -174,7 +180,7 @@ def _build_multiview_sources(payload: CreateGenerationJobRequest) -> list[dict]:
                 0,
                 {
                     "source_image_id": payload.sourceImageId,
-                    "view_label": "front",
+                    "view_label": "unknown",
                     "is_primary": True,
                 },
             )
@@ -206,19 +212,10 @@ def _build_multiview_sources(payload: CreateGenerationJobRequest) -> list[dict]:
             if source_image_id
         ]
 
-    canonical_views = {
-        canonical_view
-        for canonical_view in (_canonical_view_for_label(item["view_label"]) for item in sources)
-        if canonical_view
-    }
-    missing_canonical_views = sorted(CANONICAL_VIEWS - canonical_views)
-    if missing_canonical_views:
+    if not sources:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=(
-                "Hunyuan multiview generation requires canonical views: "
-                f"{', '.join(missing_canonical_views)}"
-            ),
+            detail="At least one multiview source image is required.",
         )
 
     seen = set()

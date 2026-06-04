@@ -152,6 +152,59 @@ class Hunyuan3DPaintPipeline:
 
         return texture
 
+    def _foreground_pixels(self, image):
+        image_array = np.array(image.convert('RGBA')) / 255.0
+        rgb = image_array[:, :, :3]
+        alpha = image_array[:, :, 3]
+        mask = alpha > 0.1
+        if not mask.any():
+            mask = np.ones(alpha.shape, dtype=bool)
+        return rgb[mask]
+
+    def _reference_color_stats(self, images):
+        pixels = []
+        for image in images:
+            image_pixels = self._foreground_pixels(image)
+            if image_pixels.size:
+                pixels.append(image_pixels)
+        if not pixels:
+            return None
+
+        pixels = np.concatenate(pixels, axis=0)
+        return {
+            'mean': pixels.mean(axis=0),
+            'std': np.maximum(pixels.std(axis=0), 0.03),
+        }
+
+    def preserve_reference_color(self, texture, mask, reference_images, strength=0.75):
+        reference_stats = self._reference_color_stats(reference_images)
+        if reference_stats is None:
+            return texture
+
+        device = texture.device
+        texture_np = texture.detach().cpu().numpy()
+        if isinstance(mask, torch.Tensor):
+            mask_np = mask.detach().cpu().numpy()
+        else:
+            mask_np = mask
+
+        visible_mask = mask_np > 0
+        if visible_mask.ndim == 3:
+            visible_mask = visible_mask.squeeze(-1)
+        if not visible_mask.any():
+            visible_mask = np.ones(texture_np.shape[:2], dtype=bool)
+
+        visible_pixels = texture_np[visible_mask]
+        texture_mean = visible_pixels.mean(axis=0)
+        texture_std = np.maximum(visible_pixels.std(axis=0), 0.03)
+
+        corrected = (texture_np - texture_mean) * (reference_stats['std'] / texture_std) + reference_stats['mean']
+        corrected = np.clip(corrected, 0.0, 1.0)
+        strength = float(np.clip(strength, 0.0, 1.0))
+        texture_np = texture_np * (1.0 - strength) + corrected * strength
+
+        return torch.tensor(texture_np).float().to(device)
+
     def recenter_image(self, image, border_ratio=0.2):
         if image.mode == 'RGB':
             return image
@@ -187,7 +240,7 @@ class Hunyuan3DPaintPipeline:
         return new_image
 
     @torch.no_grad()
-    def __call__(self, mesh, image):
+    def __call__(self, mesh, image, use_delight=True, preserve_color=True, color_match_strength=0.75):
 
         if not isinstance(image, List):
             image = [image]
@@ -201,8 +254,10 @@ class Hunyuan3DPaintPipeline:
             images_prompt.append(image_prompt)
             
         images_prompt = [self.recenter_image(image_prompt) for image_prompt in images_prompt]
+        reference_images = images_prompt
 
-        images_prompt = [self.models['delight_model'](image_prompt) for image_prompt in images_prompt]
+        if use_delight:
+            images_prompt = [self.models['delight_model'](image_prompt) for image_prompt in images_prompt]
 
         mesh = mesh_uv_wrap(mesh)
 
@@ -233,6 +288,13 @@ class Hunyuan3DPaintPipeline:
         mask_np = (mask.squeeze(-1).cpu().numpy() * 255).astype(np.uint8)
 
         texture = self.texture_inpaint(texture, mask_np)
+        if preserve_color:
+            texture = self.preserve_reference_color(
+                texture,
+                mask_np,
+                reference_images,
+                strength=color_match_strength,
+            )
 
         self.render.set_texture(texture)
         textured_mesh = self.render.save_mesh()
