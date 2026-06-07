@@ -58,8 +58,6 @@ class _AuthScreenState extends State<AuthScreen> {
   @override
   Widget build(BuildContext context) {
     final height = MediaQuery.sizeOf(context).height;
-    final topPadding = MediaQuery.paddingOf(context).top;
-    final bottomPadding = MediaQuery.paddingOf(context).bottom;
 
     return Scaffold(
       resizeToAvoidBottomInset: false,

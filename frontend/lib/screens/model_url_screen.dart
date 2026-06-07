@@ -8,15 +8,18 @@ import 'package:url_launcher/url_launcher.dart';
 import '../api_client.dart';
 import '../theme/app_theme.dart';
 import '../widgets/glb_model_viewer.dart';
+import 'ar_view_screen.dart';
 
 class ModelUrlScreen extends StatefulWidget {
   final String assetId;
   final String? initialModelUrl;
+  final String modelName;
 
   const ModelUrlScreen({
     super.key,
     required this.assetId,
     this.initialModelUrl,
+    required this.modelName,
   });
 
   @override
@@ -62,7 +65,7 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
       SnackBar(
         content: Text(
           '모델 URL을 복사했어요',
-          style: GoogleFonts.nunito(color: AppColors.textPrimary),
+          style: GoogleFonts.outfit(color: Colors.white),
         ),
       ),
     );
@@ -82,7 +85,7 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
           SnackBar(
             content: Text(
               '외부 앱에서 모델 URL을 열 수 없어요.',
-              style: GoogleFonts.nunito(),
+              style: GoogleFonts.outfit(color: Colors.white),
             ),
           ),
         );
@@ -91,32 +94,69 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('외부 앱 실행 중 오류가 발생했어요.', style: GoogleFonts.nunito()),
+            content: Text(
+              '외부 앱 실행 중 오류가 발생했어요.',
+              style: GoogleFonts.outfit(color: Colors.white),
+            ),
           ),
         );
       }
     }
   }
 
+  void _openAR() {
+    final url = _modelUrl;
+    if (url == null || url.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '3D 모델이 아직 준비되지 않았어요.',
+            style: GoogleFonts.outfit(),
+          ),
+        ),
+      );
+      return;
+    }
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => ArViewScreen(
+          modelUrl: url,
+          modelName: widget.modelName,
+          dimensions: '크기 정보 없음',
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('3D 모델 보기'),
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back_ios_new_rounded, size: 20),
-          onPressed: () => Navigator.pop(context),
-        ),
-        actions: [
-          IconButton(
-            tooltip: '새 URL 요청',
-            onPressed: _loading ? null : _load,
-            icon: const Icon(Icons.refresh_rounded),
-          ),
-        ],
+    final height = MediaQuery.sizeOf(context).height;
+    final width = MediaQuery.sizeOf(context).width;
+
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: AuthColors.radialGradientPreset,
       ),
-      body: SafeArea(
-        child: _loading
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+            onPressed: () => Navigator.pop(context),
+          ),
+          actions: [
+            IconButton(
+              tooltip: '새로고침',
+              onPressed: _loading ? null : _load,
+              icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+            ),
+          ],
+        ),
+        body: _loading
             ? Center(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
@@ -125,8 +165,8 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
                     const Gap(16),
                     Text(
                       '모델을 불러오는 중...',
-                      style: GoogleFonts.nunito(
-                        color: AppColors.textSecondary,
+                      style: GoogleFonts.outfit(
+                        color: Colors.white.withValues(alpha: 0.7),
                         fontSize: 14,
                       ),
                     ),
@@ -134,205 +174,351 @@ class _ModelUrlScreenState extends State<ModelUrlScreen> {
                 ),
               )
             : _error != null
-            ? _ErrorState(message: _error!, onRetry: _load)
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-                children: [
-                  // ── 3D 뷰어 (S3 → 로컬 파일 다운로드 후 렌더링) ──
-                  Stack(
+                ? _ErrorState(message: _error!, onRetry: _load)
+                : Stack(
                     children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(22),
-                        child: GlbModelViewer(
-                          modelUrl: _modelUrl!,
-                          height: 360,
-                        ),
-                      ),
-                      // 좌상단 배지
+                      // 1. 추상 원형 백그라운드 라인 (Abstract Circle Line Art)
                       Positioned(
-                        top: 12,
-                        left: 12,
+                        right: -60,
+                        top: height * 0.12,
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 10,
-                            vertical: 6,
-                          ),
+                          width: 280,
+                          height: 280,
                           decoration: BoxDecoration(
-                            color: Colors.black.withValues(alpha: 0.55),
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                          child: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Container(
-                                width: 7,
-                                height: 7,
-                                decoration: const BoxDecoration(
-                                  color: AppColors.primary,
-                                  shape: BoxShape.circle,
-                                ),
-                              ),
-                              const Gap(6),
-                              Text(
-                                '3D 뷰어 · 드래그로 회전',
-                                style: GoogleFonts.nunito(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w700,
-                                  color: Colors.white,
-                                ),
-                              ),
-                            ],
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: Colors.white.withValues(alpha: 0.15),
+                              width: 1.5,
+                            ),
                           ),
                         ),
                       ),
-                    ],
-                  ),
-                  const Gap(20),
-                  // ── URL 복사 카드 ──
-                  Container(
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: AppColors.card,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(color: AppColors.border),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                      // 2. 에디토리얼 타이포그래피 (Editorial Typography)
+                      Positioned(
+                        left: 24,
+                        top: 10,
+                        right: 24,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Container(
-                              padding: const EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: AppColors.primary.withValues(
-                                  alpha: 0.12,
-                                ),
-                                borderRadius: BorderRadius.circular(12),
-                              ),
-                              child: const Icon(
-                                Icons.file_download_outlined,
-                                color: AppColors.primary,
-                                size: 20,
+                            Text(
+                              widget.modelName,
+                              style: GoogleFonts.poppins(
+                                fontSize: 44,
+                                fontWeight: FontWeight.w900,
+                                color: Colors.white,
+                                height: 0.95,
+                                letterSpacing: -1.5,
                               ),
                             ),
                             const Gap(12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    'GLB 다운로드 링크',
-                                    style: GoogleFonts.nunito(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                  Text(
-                                    'S3 presigned URL',
-                                    style: GoogleFonts.nunito(
-                                      fontSize: 12,
-                                      color: AppColors.textSecondary,
-                                    ),
-                                  ),
-                                ],
+                            Text(
+                              'AI가 정교하게 설계한 3D 가구 모델입니다.\n마우스/드래그로 각도를 확인해 보세요.',
+                              style: GoogleFonts.outfit(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w300,
+                                color: Colors.white.withValues(alpha: 0.75),
+                                height: 1.45,
                               ),
                             ),
                           ],
                         ),
-                        const Gap(16),
-                        Container(
-                          width: double.infinity,
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: AppColors.surface,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.border),
-                          ),
-                          child: SelectableText(
-                            _modelUrl ?? '',
-                            style: GoogleFonts.nunito(
-                              fontSize: 11,
-                              color: AppColors.textSecondary,
-                              height: 1.45,
+                      ),
+                      // 3. 히어로 오브젝트 (3D 뷰어) - 중앙보다 약간 치우치게 배치하여 비대칭 강조
+                      Positioned(
+                        left: 0,
+                        right: 0,
+                        top: height * 0.22,
+                        height: height * 0.40,
+                        child: Center(
+                          child: Container(
+                            width: width * 0.9,
+                            height: height * 0.38,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              gradient: RadialGradient(
+                                colors: [
+                                  Colors.white.withValues(alpha: 0.12),
+                                  Colors.transparent,
+                                ],
+                                radius: 0.6,
+                              ),
+                            ),
+                            child: ClipRRect(
+                              borderRadius: BorderRadius.circular(22),
+                              child: GlbModelViewer(
+                                modelUrl: _modelUrl!,
+                                height: height * 0.38,
+                              ),
                             ),
                           ),
                         ),
-                        const Gap(14),
-                        GestureDetector(
-                          onTap: _copy,
-                          child: Container(
-                            height: 52,
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [AppColors.primary, AppColors.accent],
-                                begin: Alignment.centerLeft,
-                                end: Alignment.centerRight,
-                              ),
-                              borderRadius: BorderRadius.circular(16),
+                      ),
+                      // 4. 슬라이딩 바텀 시트 (DraggableScrollableSheet)
+                      DraggableScrollableSheet(
+                        initialChildSize: 0.26,
+                        minChildSize: 0.26,
+                        maxChildSize: 0.75,
+                        builder: (context, scrollController) {
+                          return Container(
+                            decoration: const BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.vertical(top: Radius.circular(32)),
                             ),
-                            child: Center(
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
+                            child: SingleChildScrollView(
+                              controller: scrollController,
+                              padding: const EdgeInsets.fromLTRB(24, 16, 24, 24),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Icon(
-                                    Icons.copy_rounded,
-                                    color: Colors.white,
-                                    size: 18,
+                                  // 핸들바
+                                  Center(
+                                    child: Container(
+                                      width: 40,
+                                      height: 5,
+                                      decoration: BoxDecoration(
+                                        color: Colors.grey.shade300,
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                  ),
+                                  const Gap(20),
+                                  // 상단 헤더 (이름, 카테고리 + AR 공간 배치 버튼)
+                                  Row(
+                                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment: CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              widget.modelName,
+                                              style: GoogleFonts.outfit(
+                                                fontSize: 20,
+                                                fontWeight: FontWeight.w800,
+                                                color: const Color(0xFF2A211D),
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            const Gap(4),
+                                            Text(
+                                              'Premium 3D Model',
+                                              style: GoogleFonts.outfit(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppColors.primary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      const Gap(12),
+                                      GestureDetector(
+                                        onTap: _openAR,
+                                        child: Container(
+                                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                                          decoration: BoxDecoration(
+                                            gradient: const LinearGradient(
+                                              colors: [Color(0xFF6C63FF), Color(0xFF3ECFCF)],
+                                              begin: Alignment.centerLeft,
+                                              end: Alignment.centerRight,
+                                            ),
+                                            borderRadius: BorderRadius.circular(20),
+                                            boxShadow: [
+                                              BoxShadow(
+                                                color: const Color(0xFF6C63FF).withValues(alpha: 0.2),
+                                                blurRadius: 8,
+                                                offset: const Offset(0, 3),
+                                              ),
+                                            ],
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              const Icon(
+                                                Icons.view_in_ar_rounded,
+                                                color: Colors.white,
+                                                size: 16,
+                                              ),
+                                              const Gap(6),
+                                              Text(
+                                                'AR 배치',
+                                                style: GoogleFonts.outfit(
+                                                  fontSize: 13,
+                                                  fontWeight: FontWeight.w800,
+                                                  color: Colors.white,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const Gap(16),
+                                  const Divider(color: Color(0xFFECE7E0), height: 1),
+                                  const Gap(16),
+                                  // 가구 상세 메타데이터 목록 (바둑판식 2열 정렬)
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: _buildMetaDetail('Designer', 'furniFit Studio'),
+                                      ),
+                                      Expanded(
+                                        child: _buildMetaDetail('Rating', '★ 4.8 (128 reviews)'),
+                                      ),
+                                    ],
+                                  ),
+                                  const Gap(14),
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: _buildMetaDetail('Format', 'glTF Binary (.glb)'),
+                                      ),
+                                      Expanded(
+                                        child: _buildMetaDetail('ID', widget.assetId),
+                                      ),
+                                    ],
+                                  ),
+                                  const Gap(20),
+                                  const Divider(color: Color(0xFFECE7E0), height: 1),
+                                  const Gap(16),
+                                  // GLB 복사 영역
+                                  Text(
+                                    'GLB 다운로드 링크',
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w700,
+                                      color: const Color(0xFF2A211D),
+                                    ),
                                   ),
                                   const Gap(8),
-                                  Text(
-                                    'URL 복사하기',
-                                    style: GoogleFonts.nunito(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w800,
-                                      color: Colors.white,
+                                  Container(
+                                    width: double.infinity,
+                                    padding: const EdgeInsets.all(12),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF5F2EB),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(color: const Color(0xFFE5E2DB)),
                                     ),
+                                    child: SelectableText(
+                                      _modelUrl ?? '',
+                                      maxLines: 2,
+                                      style: GoogleFonts.outfit(
+                                        fontSize: 11,
+                                        color: const Color(0xFF8E847A),
+                                        height: 1.45,
+                                      ),
+                                    ),
+                                  ),
+                                  const Gap(24),
+                                  // 5. 복사 및 웹에서 열기 버튼
+                                  Row(
+                                    children: [
+                                      Expanded(
+                                        child: GestureDetector(
+                                          onTap: _copy,
+                                          child: Container(
+                                            height: 50,
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFF5F2EB),
+                                              borderRadius: BorderRadius.circular(14),
+                                              border: Border.all(color: const Color(0xFFE5E2DB)),
+                                            ),
+                                            child: Row(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                const Icon(
+                                                  Icons.copy_rounded,
+                                                  color: Color(0xFF2A211D),
+                                                  size: 18,
+                                                ),
+                                                const Gap(8),
+                                                Text(
+                                                  '링크 복사',
+                                                  style: GoogleFonts.outfit(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: const Color(0xFF2A211D),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                      const Gap(12),
+                                      Expanded(
+                                        child: GestureDetector(
+                                          onTap: _openExternal,
+                                          child: Container(
+                                            height: 50,
+                                            decoration: BoxDecoration(
+                                              color: const Color(0xFFF5F2EB),
+                                              borderRadius: BorderRadius.circular(14),
+                                              border: Border.all(color: const Color(0xFFE5E2DB)),
+                                            ),
+                                            child: Row(
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                const Icon(
+                                                  Icons.open_in_new_rounded,
+                                                  color: Color(0xFF2A211D),
+                                                  size: 18,
+                                                ),
+                                                const Gap(8),
+                                                Text(
+                                                  '웹에서 열기',
+                                                  style: GoogleFonts.outfit(
+                                                    fontSize: 14,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: const Color(0xFF2A211D),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      ),
+                                    ],
                                   ),
                                 ],
                               ),
                             ),
-                          ),
-                        ),
-                        const Gap(10),
-                        GestureDetector(
-                          onTap: _openExternal,
-                          child: Container(
-                            height: 52,
-                            decoration: BoxDecoration(
-                              color: AppColors.surface,
-                              borderRadius: BorderRadius.circular(16),
-                              border: Border.all(color: AppColors.border),
-                            ),
-                            child: Center(
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  const Icon(
-                                    Icons.open_in_new_rounded,
-                                    color: AppColors.textPrimary,
-                                    size: 18,
-                                  ),
-                                  const Gap(8),
-                                  Text(
-                                    '외부 앱에서 열기',
-                                    style: GoogleFonts.nunito(
-                                      fontSize: 15,
-                                      fontWeight: FontWeight.w800,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
+                          );
+                        },
+                      ),
+                    ],
                   ),
-                ],
-              ),
       ),
+    );
+  }
+
+  Widget _buildMetaDetail(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: GoogleFonts.outfit(
+            fontSize: 12,
+            color: const Color(0xFF8E847A),
+            fontWeight: FontWeight.w400,
+          ),
+        ),
+        const Gap(4),
+        Text(
+          value,
+          style: GoogleFonts.outfit(
+            fontSize: 15,
+            color: const Color(0xFF2A211D),
+            fontWeight: FontWeight.w600,
+          ),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
+      ],
     );
   }
 }
@@ -360,9 +546,9 @@ class _ErrorState extends StatelessWidget {
             Text(
               message,
               textAlign: TextAlign.center,
-              style: GoogleFonts.nunito(
+              style: GoogleFonts.outfit(
                 fontSize: 14,
-                color: AppColors.textSecondary,
+                color: Colors.white.withValues(alpha: 0.7),
                 height: 1.45,
               ),
             ),
@@ -371,7 +557,10 @@ class _ErrorState extends StatelessWidget {
               onPressed: onRetry,
               child: Text(
                 '다시 시도',
-                style: GoogleFonts.nunito(color: AppColors.primary),
+                style: GoogleFonts.outfit(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.primary,
+                ),
               ),
             ),
           ],

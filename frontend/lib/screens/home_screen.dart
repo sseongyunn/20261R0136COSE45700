@@ -78,14 +78,14 @@ class _HomeScreenState extends State<HomeScreen> {
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text(
           '로그아웃',
-          style: GoogleFonts.outfit(
+          style: GoogleFonts.jost(
             fontWeight: FontWeight.w700,
             color: mainDark,
           ),
         ),
         content: Text(
           '정말 로그아웃 하시겠습니까?',
-          style: GoogleFonts.outfit(
+          style: GoogleFonts.jost(
             fontWeight: FontWeight.w300,
             color: secondaryText,
           ),
@@ -95,7 +95,7 @@ class _HomeScreenState extends State<HomeScreen> {
             onPressed: () => Navigator.pop(context),
             child: Text(
               '취소',
-              style: GoogleFonts.outfit(
+              style: GoogleFonts.jost(
                 color: secondaryText,
                 fontWeight: FontWeight.w600,
               ),
@@ -110,7 +110,7 @@ class _HomeScreenState extends State<HomeScreen> {
             },
             child: Text(
               '확인',
-              style: GoogleFonts.outfit(
+              style: GoogleFonts.jost(
                 color: highlight,
                 fontWeight: FontWeight.w600,
               ),
@@ -162,7 +162,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Text(
                                 "안녕하세요, $username님!",
-                                style: GoogleFonts.outfit(
+                                style: GoogleFonts.jost(
                                   color: secondaryText, // 5. 사용자 이메일 / 웰컴: 뮤트 타우프 그레이
                                   fontSize: 14,
                                   fontWeight: FontWeight.w300,
@@ -210,7 +210,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Text(
                         'AI가 가구를 분석하고 입체 모델로 만들어드려요.\n인테리어를 상상이 아닌 눈으로 확인해보세요.',
-                        style: GoogleFonts.outfit(
+                        style: GoogleFonts.jost(
                           fontSize: 15,
                           fontWeight: FontWeight.w300,
                           color: mainDark, // 1. 본문 설명 서브 텍스트: 딥 에스프레소 차콜
@@ -243,7 +243,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             const Gap(12),
                             Text(
                               "Search your 3D models...",
-                              style: GoogleFonts.outfit(
+                              style: GoogleFonts.jost(
                                 color: mainDark.withValues(alpha: 0.4),
                                 fontWeight: FontWeight.w300,
                               ),
@@ -261,7 +261,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Text(
                         "Categories",
-                        style: GoogleFonts.outfit(
+                        style: GoogleFonts.jost(
                           fontSize: 18,
                           fontWeight: FontWeight.w400, // 얇고 감각적인 두께로 조정
                           color: mainDark,
@@ -293,7 +293,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             children: [
                               Text(
                                 "Recent Models ($selectedCategory)",
-                                style: GoogleFonts.outfit(
+                                style: GoogleFonts.jost(
                                   fontSize: 18,
                                   fontWeight: FontWeight.w400, // 얇고 감각적인 두께로 조정
                                   color: mainDark,
@@ -309,7 +309,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   ),
                                   child: Text(
                                     "$totalCount",
-                                    style: GoogleFonts.outfit(
+                                    style: GoogleFonts.jost(
                                       color: Colors.white,
                                       fontSize: 10,
                                       fontWeight: FontWeight.w800,
@@ -326,7 +326,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             ).then((_) => _loadAssetCount()),
                             child: Text(
                               "View All",
-                              style: GoogleFonts.outfit(
+                              style: GoogleFonts.jost(
                                 color: highlight,
                                 fontWeight: FontWeight.w600,
                                 fontSize: 14,
@@ -430,7 +430,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 children: [
                   Text(
                     selectedCategory,
-                    style: GoogleFonts.outfit(
+                    style: GoogleFonts.jost(
                       color: highlight,
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
@@ -439,7 +439,7 @@ class _HomeScreenState extends State<HomeScreen> {
                   const Gap(4),
                   Text(
                     title,
-                    style: GoogleFonts.outfit(
+                    style: GoogleFonts.jost(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                       color: mainDark,
@@ -621,7 +621,7 @@ class _CategoryTabsState extends State<_CategoryTabs> {
                       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                       child: Text(
                         category,
-                        style: GoogleFonts.outfit(
+                        style: GoogleFonts.jost(
                           fontSize: isSelected ? 16 : 15,
                           fontWeight: isSelected ? FontWeight.w500 : FontWeight.w300,
                           color: isSelected

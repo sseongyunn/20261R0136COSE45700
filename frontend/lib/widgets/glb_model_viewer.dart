@@ -14,11 +14,13 @@ import '../theme/app_theme.dart';
 class GlbModelViewer extends StatefulWidget {
   final String modelUrl;
   final double height;
+  final Color backgroundColor;
 
   const GlbModelViewer({
     super.key,
     required this.modelUrl,
     this.height = 360,
+    this.backgroundColor = Colors.transparent,
   });
 
   @override
@@ -72,7 +74,7 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
         height: widget.height,
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF1A1A1A),
+            color: widget.backgroundColor,
             borderRadius: BorderRadius.circular(22),
           ),
           child: Column(
@@ -98,7 +100,7 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
         height: widget.height,
         child: Container(
           decoration: BoxDecoration(
-            color: const Color(0xFF1A1A1A),
+            color: widget.backgroundColor,
             borderRadius: BorderRadius.circular(22),
           ),
           child: Column(
@@ -140,7 +142,7 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
         autoRotate: true,
         cameraControls: true,
         shadowIntensity: 1,
-        backgroundColor: const Color(0xFF1A1A1A),
+        backgroundColor: widget.backgroundColor,
       ),
     );
   }
