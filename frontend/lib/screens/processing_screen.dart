@@ -268,10 +268,10 @@ class _PulseOrb extends StatelessWidget {
             height: 96,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF2C1810),
+              color: Colors.transparent,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.primary.withValues(alpha: 0.35),
+                  color: const Color(0xFFD3AD97).withValues(alpha: 0.35),
                   blurRadius: glow,
                   spreadRadius: 4,
                 ),
@@ -279,7 +279,7 @@ class _PulseOrb extends StatelessWidget {
             ),
             child: const Icon(
               Icons.auto_awesome_rounded,
-              color: AppColors.primary,
+              color: Color(0xFFD3AD97),
               size: 40,
             ),
           ),
@@ -353,15 +353,15 @@ class _StepRow extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: done
-                      ? AppColors.success
+                      ? const Color(0xFF2884B8).withValues(alpha: 0.50)
                       : active
-                      ? AppColors.primary.withValues(alpha: 0.15)
+                      ? const Color(0xFFD3AD97).withValues(alpha: 0.15)
                       : Colors.white.withValues(alpha: 0.1),
                   border: Border.all(
                     color: done
-                        ? AppColors.success
+                        ? const Color(0xFF2884B8).withValues(alpha: 0.50)
                         : active
-                        ? AppColors.primary
+                        ? const Color(0xFFD3AD97)
                         : Colors.white.withValues(alpha: 0.25),
                     width: 1.5,
                   ),
@@ -377,7 +377,7 @@ class _StepRow extends StatelessWidget {
                         padding: EdgeInsets.all(7),
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: AppColors.primary,
+                          color: Color(0xFFD3AD97),
                           backgroundColor: Colors.transparent,
                         ),
                       )
@@ -389,7 +389,7 @@ class _StepRow extends StatelessWidget {
                   height: 14,
                   margin: const EdgeInsets.symmetric(vertical: 3),
                   color: done
-                      ? AppColors.success.withValues(alpha: 0.35)
+                      ? const Color(0xFF2884B8).withValues(alpha: 0.35)
                       : Colors.white.withValues(alpha: 0.2),
                 ),
             ],
@@ -433,7 +433,7 @@ class _StepRow extends StatelessWidget {
                     style: GoogleFonts.outfit(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.success,
+                      color: const Color(0xFF2884B8),
                     ),
                   )
                 : active

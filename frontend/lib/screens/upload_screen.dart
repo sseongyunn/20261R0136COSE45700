@@ -466,11 +466,38 @@ class _ModeButton extends StatelessWidget {
       child: GestureDetector(
         onTap: onTap,
         child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
+          duration: const Duration(milliseconds: 80),
           height: 44,
           decoration: BoxDecoration(
-            color: selected ? AppColors.primary : Colors.transparent,
+            gradient: selected
+                ? LinearGradient(
+                    colors: [
+                      const Color(0xFFBE6E43).withValues(alpha: 0.2),
+                      const Color(0xFF7A3916).withValues(alpha: 0.2),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  )
+                : null,
             borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: selected ? Colors.white.withValues(alpha: 0.2) : Colors.transparent,
+              width: 1.2,
+            ),
+            boxShadow: selected
+                ? [
+                    BoxShadow(
+                      color: const Color(0xFFD4845A).withValues(alpha: 0.25),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ]
+                : null,
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
@@ -525,13 +552,36 @@ class _MultiviewGuide extends StatelessWidget {
               Container(
                 padding: const EdgeInsets.all(8),
                 decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.15),
+                  gradient: LinearGradient(
+                    colors: [
+                      const Color(0xFFBE6E43).withValues(alpha: 0.09),
+                      const Color(0xFF7A3916).withValues(alpha: 0.09),
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
                   shape: BoxShape.circle,
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.2),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFD4845A).withValues(alpha: 0.25),
+                      blurRadius: 14,
+                      offset: const Offset(0, 6),
+                    ),
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 4,
+                      offset: const Offset(0, 2),
+                    ),
+                  ],
                 ),
                 child: const Icon(
                   Icons.tips_and_updates_outlined,
                   size: 18,
-                  color: AppColors.primary,
+                  color: Colors.white,
                 ),
               ),
               const Gap(10),
@@ -556,8 +606,8 @@ class _MultiviewGuide extends StatelessWidget {
                     width: 5,
                     height: 5,
                     margin: const EdgeInsets.only(top: 8, right: 10),
-                    decoration: const BoxDecoration(
-                      color: AppColors.primary,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFBE6E43).withValues(alpha: 0.8),
                       shape: BoxShape.circle,
                     ),
                   ),
@@ -657,12 +707,35 @@ class _ViewTile extends StatelessWidget {
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.15),
+                      gradient: LinearGradient(
+                        colors: [
+                          const Color(0xFFBE6E43).withValues(alpha: 0.09),
+                          const Color(0xFF7A3916).withValues(alpha: 0.09),
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
                       shape: BoxShape.circle,
+                      border: Border.all(
+                        color: Colors.white.withValues(alpha: 0.2),
+                        width: 1.2,
+                      ),
+                      boxShadow: [
+                        BoxShadow(
+                          color: const Color(0xFFD4845A).withValues(alpha: 0.25),
+                          blurRadius: 14,
+                          offset: const Offset(0, 6),
+                        ),
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.15),
+                          blurRadius: 4,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
                     ),
                     child: const Icon(
                       Icons.add_photo_alternate_outlined,
-                      color: AppColors.primary,
+                      color: Colors.white,
                       size: 24,
                     ),
                   ),
@@ -1068,7 +1141,10 @@ class _ConvertButton extends StatelessWidget {
           color: enabled ? null : Colors.white.withValues(alpha: 0.08),
           gradient: enabled
               ? const LinearGradient(
-                  colors: [AppColors.primary, AppColors.accent],
+                  colors: [
+                    Color(0xFFD1BAD2),
+                    Color(0xFF2884B8),
+                  ],
                   begin: Alignment.centerLeft,
                   end: Alignment.centerRight,
                 )

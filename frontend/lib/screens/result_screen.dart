@@ -475,12 +475,31 @@ class _SaveButton extends StatelessWidget {
         duration: const Duration(milliseconds: 350),
         height: 58,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [AppColors.primary, AppColors.accent],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
+          gradient: LinearGradient(
+            colors: [
+              const Color(0xFFBE6E43).withValues(alpha: 0.2),
+              const Color(0xFF7A3916).withValues(alpha: 0.2),
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
           ),
           borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.2),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFD4845A).withValues(alpha: 0.25),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Center(
           child: Row(
