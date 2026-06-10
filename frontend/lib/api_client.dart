@@ -399,6 +399,7 @@ class ApiClient extends ChangeNotifier {
     String? backSourceImageId,
     String? leftSourceImageId,
     String? rightSourceImageId,
+    List<Map<String, String>>? viewImages,
     double? widthCm,
     double? heightCm,
     double? depthCm,
@@ -420,6 +421,9 @@ class ApiClient extends ChangeNotifier {
     }
     if (rightSourceImageId != null) {
       body['rightSourceImageId'] = rightSourceImageId;
+    }
+    if (viewImages != null && viewImages.isNotEmpty) {
+      body['viewImages'] = viewImages;
     }
 
     final json = await _postJson('/generation-jobs', body);

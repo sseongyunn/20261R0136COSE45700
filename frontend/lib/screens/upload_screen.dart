@@ -15,34 +15,16 @@ import 'processing_screen.dart';
 
 enum _UploadMode { single, multiview }
 
-enum _FurnitureView { front, back, left, right }
+class _MultiviewPhoto {
+  final String id;
+  final XFile file;
+  final Uint8List bytes;
 
-extension _FurnitureViewText on _FurnitureView {
-  String get label {
-    switch (this) {
-      case _FurnitureView.front:
-        return '앞면';
-      case _FurnitureView.back:
-        return '뒷면';
-      case _FurnitureView.left:
-        return '왼쪽';
-      case _FurnitureView.right:
-        return '오른쪽';
-    }
-  }
-
-  String get helper {
-    switch (this) {
-      case _FurnitureView.front:
-        return '정면 사진';
-      case _FurnitureView.back:
-        return '후면 사진';
-      case _FurnitureView.left:
-        return '좌측 사진';
-      case _FurnitureView.right:
-        return '우측 사진';
-    }
-  }
+  const _MultiviewPhoto({
+    required this.id,
+    required this.file,
+    required this.bytes,
+  });
 }
 
 class UploadScreen extends StatefulWidget {
@@ -62,17 +44,14 @@ class _UploadScreenState extends State<UploadScreen> {
   _UploadMode _mode = _UploadMode.single;
   XFile? _xfile;
   Uint8List? _bytes;
-  final Map<_FurnitureView, XFile> _viewFiles = {};
-  final Map<_FurnitureView, Uint8List> _viewBytes = {};
+  final List<_MultiviewPhoto> _viewPhotos = [];
   bool _analyzed = false;
   bool _submitting = false;
   String? _error;
 
   bool get _hasImage => _xfile != null && _bytes != null;
 
-  bool get _hasMultiviewImages => _FurnitureView.values.every(
-    (view) => _viewFiles[view] != null && _viewBytes[view] != null,
-  );
+  bool get _hasMultiviewImages => _viewPhotos.isNotEmpty;
 
   bool get _hasRequiredImages =>
       _mode == _UploadMode.single ? _hasImage : _hasMultiviewImages;
@@ -96,9 +75,7 @@ class _UploadScreenState extends State<UploadScreen> {
     });
   }
 
-  Future<void> _pick({_FurnitureView? view}) async {
-    if (_mode == _UploadMode.multiview && view == null) return;
-
+  Future<void> _pickSingleImage() async {
     final picked = await ImagePicker().pickImage(
       source: ImageSource.gallery,
       maxWidth: 1920,
@@ -109,18 +86,44 @@ class _UploadScreenState extends State<UploadScreen> {
 
     final bytes = await picked.readAsBytes();
     setState(() {
-      if (_mode == _UploadMode.single) {
-        _xfile = picked;
-        _bytes = bytes;
-      } else {
-        _viewFiles[view!] = picked;
-        _viewBytes[view] = bytes;
-      }
+      _xfile = picked;
+      _bytes = bytes;
       _analyzed = false;
       _error = null;
     });
 
     if (!_hasRequiredImages) return;
+    await Future.delayed(const Duration(milliseconds: 900));
+    if (mounted && _hasRequiredImages) setState(() => _analyzed = true);
+  }
+
+  Future<void> _pickMultiviewImages() async {
+    final picked = await ImagePicker().pickMultiImage(
+      maxWidth: 1920,
+      maxHeight: 1920,
+      imageQuality: 85,
+    );
+    if (picked.isEmpty || !mounted) return;
+
+    final added = <_MultiviewPhoto>[];
+    final timestamp = DateTime.now().microsecondsSinceEpoch;
+    for (var i = 0; i < picked.length; i++) {
+      final file = picked[i];
+      added.add(
+        _MultiviewPhoto(
+          id: '${timestamp}_$i',
+          file: file,
+          bytes: await file.readAsBytes(),
+        ),
+      );
+    }
+
+    setState(() {
+      _viewPhotos.addAll(added);
+      _analyzed = false;
+      _error = null;
+    });
+
     await Future.delayed(const Duration(milliseconds: 900));
     if (mounted && _hasRequiredImages) setState(() => _analyzed = true);
   }
@@ -133,10 +136,9 @@ class _UploadScreenState extends State<UploadScreen> {
     });
   }
 
-  void _removeViewImage(_FurnitureView view) {
+  void _removeMultiviewImage(String id) {
     setState(() {
-      _viewFiles.remove(view);
-      _viewBytes.remove(view);
+      _viewPhotos.removeWhere((photo) => photo.id == id);
       _analyzed = false;
     });
   }
@@ -152,10 +154,8 @@ class _UploadScreenState extends State<UploadScreen> {
     if (_mode == _UploadMode.single) {
       return _storagePathFor(_xfile!, _bytes!);
     }
-    return _storagePathFor(
-      _viewFiles[_FurnitureView.front]!,
-      _viewBytes[_FurnitureView.front]!,
-    );
+    final primaryPhoto = _viewPhotos.first;
+    return _storagePathFor(primaryPhoto.file, primaryPhoto.bytes);
   }
 
   Future<UploadTicket> _uploadSourceImage(
@@ -210,19 +210,24 @@ class _UploadScreenState extends State<UploadScreen> {
           depthCm: _parseDouble(_depthController.text),
         );
       } else {
-        final tickets = <_FurnitureView, UploadTicket>{};
-        for (final view in _FurnitureView.values) {
-          tickets[view] = await _uploadSourceImage(
+        final tickets = <String, UploadTicket>{};
+        for (final photo in _viewPhotos) {
+          tickets[photo.id] = await _uploadSourceImage(
             api,
-            _viewFiles[view]!,
-            _viewBytes[view]!,
+            photo.file,
+            photo.bytes,
           );
         }
+        final primaryPhoto = _viewPhotos.first;
         job = await api.createGenerationJob(
-          sourceImageId: tickets[_FurnitureView.front]!.sourceImageId,
-          backSourceImageId: tickets[_FurnitureView.back]!.sourceImageId,
-          leftSourceImageId: tickets[_FurnitureView.left]!.sourceImageId,
-          rightSourceImageId: tickets[_FurnitureView.right]!.sourceImageId,
+          sourceImageId: tickets[primaryPhoto.id]!.sourceImageId,
+          viewImages: [
+            for (final photo in _viewPhotos)
+              {
+                'sourceImageId': tickets[photo.id]!.sourceImageId,
+                'view': 'unknown',
+              },
+          ],
           name: name,
           category: category,
           generationMode: 'multiview',
@@ -328,7 +333,11 @@ class _UploadScreenState extends State<UploadScreen> {
             ),
           ),
           leading: IconButton(
-            icon: const Icon(Icons.arrow_back_ios_new_rounded, color: Colors.white, size: 20),
+            icon: const Icon(
+              Icons.arrow_back_ios_new_rounded,
+              color: Colors.white,
+              size: 20,
+            ),
             onPressed: _submitting ? null : () => Navigator.pop(context),
           ),
         ),
@@ -339,9 +348,7 @@ class _UploadScreenState extends State<UploadScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  isMultiview
-                      ? '가구의 앞, 뒤, 왼쪽, 오른쪽 사진을 등록해주세요'
-                      : '가구가 잘 보이는 사진을 골라주세요',
+                  isMultiview ? '가구의 여러 방향 사진을 등록해주세요' : '가구가 잘 보이는 사진을 골라주세요',
                   style: GoogleFonts.outfit(
                     fontSize: 14,
                     color: Colors.white.withValues(alpha: 0.7),
@@ -357,14 +364,14 @@ class _UploadScreenState extends State<UploadScreen> {
                 const Gap(20),
                 if (isMultiview)
                   _MultiviewPickerGrid(
-                    viewBytes: _viewBytes,
+                    photos: _viewPhotos,
                     submitting: _submitting,
-                    onPick: (view) => _pick(view: view),
-                    onRemove: _removeViewImage,
+                    onAdd: _pickMultiviewImages,
+                    onRemove: _removeMultiviewImage,
                   )
                 else
                   GestureDetector(
-                    onTap: _submitting ? null : _pick,
+                    onTap: _submitting ? null : _pickSingleImage,
                     child: _hasImage
                         ? _Preview(
                             bytes: _bytes!,
@@ -481,7 +488,9 @@ class _ModeButton extends StatelessWidget {
                 : null,
             borderRadius: BorderRadius.circular(14),
             border: Border.all(
-              color: selected ? Colors.white.withValues(alpha: 0.2) : Colors.transparent,
+              color: selected
+                  ? Colors.white.withValues(alpha: 0.2)
+                  : Colors.transparent,
               width: 1.2,
             ),
             boxShadow: selected
@@ -505,7 +514,9 @@ class _ModeButton extends StatelessWidget {
               Icon(
                 icon,
                 size: 18,
-                color: selected ? Colors.white : Colors.white.withValues(alpha: 0.6),
+                color: selected
+                    ? Colors.white
+                    : Colors.white.withValues(alpha: 0.6),
               ),
               const Gap(8),
               Text(
@@ -513,7 +524,9 @@ class _ModeButton extends StatelessWidget {
                 style: GoogleFonts.outfit(
                   fontSize: 13,
                   fontWeight: FontWeight.w800,
-                  color: selected ? Colors.white : Colors.white.withValues(alpha: 0.6),
+                  color: selected
+                      ? Colors.white
+                      : Colors.white.withValues(alpha: 0.6),
                 ),
               ),
             ],
@@ -530,10 +543,10 @@ class _MultiviewGuide extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     const tips = [
-      '네 방향 모두 같은 조명과 배경에서 촬영해주세요.',
+      '가능한 여러 방향을 같은 조명과 배경에서 촬영해주세요.',
       '카메라와 가구 사이 거리를 최대한 비슷하게 유지해주세요.',
       '색감이 바뀌지 않도록 같은 노출과 화이트밸런스를 권장합니다.',
-      '가구가 잘리지 않게 중앙에 맞춰주세요.',
+      '서버가 각 사진의 view를 판별하므로 방향이 다른 사진을 함께 넣어주세요.',
     ];
 
     return Container(
@@ -631,15 +644,15 @@ class _MultiviewGuide extends StatelessWidget {
 }
 
 class _MultiviewPickerGrid extends StatelessWidget {
-  final Map<_FurnitureView, Uint8List> viewBytes;
+  final List<_MultiviewPhoto> photos;
   final bool submitting;
-  final ValueChanged<_FurnitureView> onPick;
-  final ValueChanged<_FurnitureView> onRemove;
+  final VoidCallback onAdd;
+  final ValueChanged<String> onRemove;
 
   const _MultiviewPickerGrid({
-    required this.viewBytes,
+    required this.photos,
     required this.submitting,
-    required this.onPick,
+    required this.onAdd,
     required this.onRemove,
   });
 
@@ -653,152 +666,196 @@ class _MultiviewPickerGrid extends StatelessWidget {
       crossAxisSpacing: 12,
       childAspectRatio: 0.95,
       children: [
-        for (final view in _FurnitureView.values)
-          _ViewTile(
-            view: view,
-            bytes: viewBytes[view],
-            onTap: submitting ? null : () => onPick(view),
-            onRemove: submitting ? null : () => onRemove(view),
+        for (var i = 0; i < photos.length; i++)
+          _PhotoTile(
+            photo: photos[i],
+            index: i,
+            onRemove: submitting ? null : () => onRemove(photos[i].id),
           ),
+        _AddPhotoTile(onTap: submitting ? null : onAdd),
       ],
     );
   }
 }
 
-class _ViewTile extends StatelessWidget {
-  final _FurnitureView view;
-  final Uint8List? bytes;
-  final VoidCallback? onTap;
+class _PhotoTile extends StatelessWidget {
+  final _MultiviewPhoto photo;
+  final int index;
   final VoidCallback? onRemove;
 
-  const _ViewTile({
-    required this.view,
-    required this.bytes,
-    required this.onTap,
+  const _PhotoTile({
+    required this.photo,
+    required this.index,
     required this.onRemove,
   });
 
   @override
   Widget build(BuildContext context) {
-    final hasImage = bytes != null;
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.transparent,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.primary.withValues(alpha: 0.45)),
+      ),
+      clipBehavior: Clip.hardEdge,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          Image.memory(photo.bytes, fit: BoxFit.cover),
+          Positioned(
+            left: 10,
+            top: 10,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.58),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                index == 0 ? '대표 이미지' : '후보 ${index + 1}',
+                style: GoogleFonts.outfit(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            left: 10,
+            right: 10,
+            bottom: 10,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.55),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(
+                    Icons.auto_awesome_rounded,
+                    color: Colors.white,
+                    size: 14,
+                  ),
+                  const Gap(6),
+                  Expanded(
+                    child: Text(
+                      'AI view 판별',
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.outfit(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w800,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Positioned(
+            top: 10,
+            right: 10,
+            child: GestureDetector(
+              onTap: onRemove,
+              child: Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.55),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.close_rounded,
+                  color: Colors.white,
+                  size: 16,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
 
+class _AddPhotoTile extends StatelessWidget {
+  final VoidCallback? onTap;
+
+  const _AddPhotoTile({required this.onTap});
+
+  @override
+  Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
         decoration: BoxDecoration(
-          color: hasImage ? Colors.transparent : Colors.white.withValues(alpha: 0.15),
+          color: Colors.white.withValues(alpha: 0.15),
           borderRadius: BorderRadius.circular(18),
-          border: Border.all(
-            color: hasImage
-                ? AppColors.primary.withValues(alpha: 0.45)
-                : Colors.white.withValues(alpha: 0.2),
-          ),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
         ),
         clipBehavior: Clip.hardEdge,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            if (hasImage)
-              Image.memory(bytes!, fit: BoxFit.cover)
-            else
-              Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      gradient: LinearGradient(
-                        colors: [
-                          const Color(0xFFBE6E43).withValues(alpha: 0.09),
-                          const Color(0xFF7A3916).withValues(alpha: 0.09),
-                        ],
-                        begin: Alignment.topCenter,
-                        end: Alignment.bottomCenter,
-                      ),
-                      shape: BoxShape.circle,
-                      border: Border.all(
-                        color: Colors.white.withValues(alpha: 0.2),
-                        width: 1.2,
-                      ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFFD4845A).withValues(alpha: 0.25),
-                          blurRadius: 14,
-                          offset: const Offset(0, 6),
-                        ),
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.15),
-                          blurRadius: 4,
-                          offset: const Offset(0, 2),
-                        ),
+            Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        const Color(0xFFBE6E43).withValues(alpha: 0.09),
+                        const Color(0xFF7A3916).withValues(alpha: 0.09),
                       ],
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
                     ),
-                    child: const Icon(
-                      Icons.add_photo_alternate_outlined,
-                      color: Colors.white,
-                      size: 24,
+                    shape: BoxShape.circle,
+                    border: Border.all(
+                      color: Colors.white.withValues(alpha: 0.2),
+                      width: 1.2,
                     ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: const Color(0xFFD4845A).withValues(alpha: 0.25),
+                        blurRadius: 14,
+                        offset: const Offset(0, 6),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.15),
+                        blurRadius: 4,
+                        offset: const Offset(0, 2),
+                      ),
+                    ],
                   ),
-                  const Gap(12),
-                  Text(
-                    view.label,
-                    style: GoogleFonts.outfit(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w800,
-                      color: Colors.white,
-                    ),
+                  child: const Icon(
+                    Icons.add_photo_alternate_outlined,
+                    color: Colors.white,
+                    size: 24,
                   ),
-                  const Gap(4),
-                  Text(
-                    view.helper,
-                    style: GoogleFonts.outfit(
-                      fontSize: 11,
-                      color: Colors.white.withValues(alpha: 0.5),
-                    ),
-                  ),
-                ],
-              ),
-            Positioned(
-              left: 10,
-              top: 10,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 5),
-                decoration: BoxDecoration(
-                  color: hasImage
-                      ? Colors.black.withValues(alpha: 0.58)
-                      : Colors.black.withValues(alpha: 0.35),
-                  borderRadius: BorderRadius.circular(999),
                 ),
-                child: Text(
-                  view.label,
+                const Gap(12),
+                Text(
+                  '사진 추가',
                   style: GoogleFonts.outfit(
-                    fontSize: 11,
+                    fontSize: 15,
                     fontWeight: FontWeight.w800,
                     color: Colors.white,
                   ),
                 ),
-              ),
-            ),
-            if (hasImage)
-              Positioned(
-                top: 10,
-                right: 10,
-                child: GestureDetector(
-                  onTap: onRemove,
-                  child: Container(
-                    padding: const EdgeInsets.all(6),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withValues(alpha: 0.55),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.close_rounded,
-                      color: Colors.white,
-                      size: 16,
-                    ),
+                const Gap(4),
+                Text(
+                  '여러 장 선택 가능',
+                  style: GoogleFonts.outfit(
+                    fontSize: 11,
+                    color: Colors.white.withValues(alpha: 0.5),
                   ),
                 ),
-              ),
+              ],
+            ),
           ],
         ),
       ),
@@ -910,7 +967,7 @@ class _AnalysisCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final labels = mode == _UploadMode.multiview
-        ? ['앞·뒤·왼쪽·오른쪽 이미지 준비됨', '색상과 거리 일관성 확인됨', 'Hunyuan 멀티뷰 생성 가능']
+        ? ['멀티뷰 이미지 준비됨', '서버에서 view 자동 판별', 'Hunyuan 멀티뷰 생성 가능']
         : ['이미지 품질 양호', '가구 오브젝트 감지됨', 'AI 3D 생성 가능'];
 
     return Container(
@@ -1159,7 +1216,9 @@ class _TextInput extends StatelessWidget {
       style: GoogleFonts.outfit(fontSize: 14, color: Colors.white),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: GoogleFonts.outfit(color: Colors.white.withValues(alpha: 0.6)),
+        labelStyle: GoogleFonts.outfit(
+          color: Colors.white.withValues(alpha: 0.6),
+        ),
         filled: true,
         fillColor: Colors.black.withValues(alpha: 0.15),
         contentPadding: const EdgeInsets.symmetric(
@@ -1229,10 +1288,7 @@ class _ConvertButton extends StatelessWidget {
           color: enabled ? null : Colors.white.withValues(alpha: 0.08),
           gradient: enabled
               ? const LinearGradient(
-                  colors: [
-                    Color(0xFFD1BAD2),
-                    Color(0xFF2884B8),
-                  ],
+                  colors: [Color(0xFFD1BAD2), Color(0xFF2884B8)],
                   begin: Alignment.centerLeft,
                   end: Alignment.centerRight,
                 )
@@ -1254,7 +1310,9 @@ class _ConvertButton extends StatelessWidget {
                   children: [
                     Icon(
                       Icons.auto_awesome_rounded,
-                      color: enabled ? Colors.white : Colors.white.withValues(alpha: 0.35),
+                      color: enabled
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.35),
                       size: 20,
                     ),
                     const Gap(8),
@@ -1263,7 +1321,9 @@ class _ConvertButton extends StatelessWidget {
                       style: GoogleFonts.outfit(
                         fontSize: 16,
                         fontWeight: FontWeight.w700,
-                        color: enabled ? Colors.white : Colors.white.withValues(alpha: 0.35),
+                        color: enabled
+                            ? Colors.white
+                            : Colors.white.withValues(alpha: 0.35),
                       ),
                     ),
                   ],
