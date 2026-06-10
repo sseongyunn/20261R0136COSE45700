@@ -154,7 +154,8 @@ class _HomeScreenState extends State<HomeScreen> {
     final double heroHeight = heroWidth / 1.4;
     final double buttonHeight = heroHeight / 4;
     final double cardWidth = screenWidth * 0.25;
-    final double cardHeight = cardWidth / 0.78;
+    // 카드의 세로 길이를 줄여 하단 플로팅 바와의 겹침을 방지하기 위해 가로세로 비율 조정 (0.78 -> 1.05)
+    final double cardHeight = cardWidth / 1.05;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -240,9 +241,9 @@ class _HomeScreenState extends State<HomeScreen> {
                     // 3. 프리미엄 히어로 카드 & AR 공간 배치 카드 세션
                     const Gap(16), // 24 -> 16 (상단 이동)
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: AspectRatio(
-                        aspectRatio: 1.4,
+                      padding: const EdgeInsets.symmetric(horizontal: 20),
+                      child: SizedBox(
+                        height: heroHeight,
                         child: GestureDetector(
                           onTap: () => Navigator.push(
                             context,
@@ -332,7 +333,14 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 height: btnHeight,
                                                 child: Container(
                                                   decoration: BoxDecoration(
-                                                    color: mainDark,
+                                                    gradient: const LinearGradient(
+                                                      colors: [
+                                                        Color(0xFFF1A882),
+                                                        Color(0xFFC66C44),
+                                                      ],
+                                                      begin: Alignment.topLeft,
+                                                      end: Alignment.bottomRight,
+                                                    ),
                                                     borderRadius: BorderRadius.circular(btnHeight / 2),
                                                   ),
                                                   child: Center(
@@ -403,18 +411,22 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Container(
                                 height: buttonHeight,
                                 decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
+                                  gradient: LinearGradient(
                                     colors: [
-                                      Color(0xFF6C63FF),
-                                      Color(0xFF3ECFCF),
+                                      const Color(0xFF6C63FF).withValues(alpha: 0.32),
+                                      const Color(0xFF3ECFCF).withValues(alpha: 0.22),
                                     ],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   ),
                                   borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: const Color(0xFF6C63FF).withValues(alpha: 0.32),
+                                    width: 1.0,
+                                  ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
+                                      color: const Color(0xFF6C63FF).withValues(alpha: 0.03),
                                       blurRadius: 10,
                                       offset: const Offset(0, 4),
                                     ),
@@ -428,7 +440,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       child: Icon(
                                         Icons.view_in_ar_rounded,
                                         size: buttonHeight * 0.9,
-                                        color: Colors.white.withValues(alpha: 0.12),
+                                        color: const Color(0xFF6C63FF).withValues(alpha: 0.08),
                                       ),
                                     ),
                                     Padding(
@@ -438,12 +450,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                           Container(
                                             padding: const EdgeInsets.all(5),
                                             decoration: BoxDecoration(
-                                              color: Colors.white.withValues(alpha: 0.2),
+                                              color: const Color(0xFF6C63FF).withValues(alpha: 0.1),
                                               shape: BoxShape.circle,
                                             ),
                                             child: Icon(
                                               Icons.view_in_ar_outlined,
-                                              color: Colors.white,
+                                              color: const Color(0xFF5A52E6),
                                               size: buttonHeight * 0.32,
                                             ),
                                           ),
@@ -456,7 +468,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 Text(
                                                   'AR 공간 배치',
                                                   style: GoogleFonts.jost(
-                                                    color: Colors.white,
+                                                    color: const Color(0xFF5A52E6),
                                                     fontSize: buttonHeight * 0.20,
                                                     fontWeight: FontWeight.w800,
                                                   ),
@@ -466,7 +478,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 Text(
                                                   '즉시 공간에 배치',
                                                   style: GoogleFonts.jost(
-                                                    color: Colors.white.withValues(alpha: 0.85),
+                                                    color: secondaryText,
                                                     fontSize: buttonHeight * 0.14,
                                                     fontWeight: FontWeight.w400,
                                                   ),
@@ -494,18 +506,22 @@ class _HomeScreenState extends State<HomeScreen> {
                               child: Container(
                                 height: buttonHeight,
                                 decoration: BoxDecoration(
-                                  gradient: const LinearGradient(
+                                  gradient: LinearGradient(
                                     colors: [
-                                      Color(0xFFE4A78B),
-                                      Color(0xFFC08365),
+                                      highlight.withValues(alpha: 0.32),
+                                      highlight.withValues(alpha: 0.22),
                                     ],
                                     begin: Alignment.topLeft,
                                     end: Alignment.bottomRight,
                                   ),
                                   borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(
+                                    color: highlight.withValues(alpha: 0.32),
+                                    width: 1.0,
+                                  ),
                                   boxShadow: [
                                     BoxShadow(
-                                      color: const Color(0xFFC08365).withValues(alpha: 0.15),
+                                      color: highlight.withValues(alpha: 0.03),
                                       blurRadius: 10,
                                       offset: const Offset(0, 4),
                                     ),
@@ -519,7 +535,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       child: Icon(
                                         Icons.photo_library_rounded,
                                         size: buttonHeight * 0.9,
-                                        color: Colors.white.withValues(alpha: 0.12),
+                                        color: highlight.withValues(alpha: 0.12),
                                       ),
                                     ),
                                     Padding(
@@ -529,12 +545,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                           Container(
                                             padding: const EdgeInsets.all(5),
                                             decoration: BoxDecoration(
-                                              color: Colors.white.withValues(alpha: 0.2),
+                                              color: highlight.withValues(alpha: 0.15),
                                               shape: BoxShape.circle,
                                             ),
                                             child: Icon(
                                               Icons.photo_library_outlined,
-                                              color: Colors.white,
+                                              color: mainDark,
                                               size: buttonHeight * 0.32,
                                             ),
                                           ),
@@ -547,7 +563,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 Text(
                                                   '내 가구 갤러리',
                                                   style: GoogleFonts.jost(
-                                                    color: Colors.white,
+                                                    color: mainDark,
                                                     fontSize: buttonHeight * 0.20,
                                                     fontWeight: FontWeight.w800,
                                                   ),
@@ -557,7 +573,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                                 Text(
                                                   '생성 모델 전체 보기',
                                                   style: GoogleFonts.jost(
-                                                    color: Colors.white.withValues(alpha: 0.85),
+                                                    color: secondaryText,
                                                     fontSize: buttonHeight * 0.14,
                                                     fontWeight: FontWeight.w400,
                                                   ),
@@ -743,46 +759,131 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildFloatingBottomNav() {
     return Align(
       alignment: Alignment.bottomCenter,
-      child: Container(
-        margin: const EdgeInsets.only(bottom: 28),
-        height: 66,
-        width: 240, // 3개의 버튼이 중앙에 컴팩트하게 모이도록 너비 제한
-        decoration: BoxDecoration(
-          color: mainDark,
-          borderRadius: BorderRadius.circular(33),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.25),
-              blurRadius: 20,
-              offset: const Offset(0, 10),
-            )
-          ],
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            // 왼쪽 버튼: 홈 화면 (현재 활성화 상태로 라이트 브라운 하이라이트)
-            IconButton(
-              icon: const Icon(Icons.home_filled, color: Colors.white),
-              onPressed: _loadAssets,
-            ),
-            // 가운데 버튼: 사진으로 새로운 모델 만들기 (UploadScreen 연동)
-            IconButton(
-              icon: Icon(Icons.document_scanner_outlined, color: highlight),
-              onPressed: () => Navigator.push(
-                context,
-                _slide(const UploadScreen()),
-              ).then((_) => _loadAssets()),
-            ),
-            // 오른쪽 버튼: 즉시 AR 공간 배치 진입 (ArViewScreen 연동)
-            IconButton(
-              icon: Icon(Icons.view_in_ar_outlined, color: Colors.white.withValues(alpha: 0.6)),
-              onPressed: () => Navigator.push(
-                context,
-                _slide(const ArViewScreen()),
-              ).then((_) => _loadAssets()),
-            ),
-          ],
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 28),
+        child: SizedBox(
+          width: 260, // 너비를 더 컴팩트하게 줄임 (300 -> 260)
+          height: 72, // 전체 돌출 높이 축소 (82 -> 72)
+          child: Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              // White pill container
+              Container(
+                height: 56, // 바의 높이 축소 (64 -> 56)
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(28),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.06),
+                      blurRadius: 20,
+                      offset: const Offset(0, 10),
+                    )
+                  ],
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    // Left: Home
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: _loadAssets,
+                        behavior: HitTestBehavior.opaque,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.home_rounded, color: highlight, size: 22), // 24 -> 22
+                            const Gap(2),
+                            Text(
+                              "Home",
+                              style: GoogleFonts.jost(
+                                color: highlight,
+                                fontSize: 11, // 12.5 -> 11
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    // Center space for overlapping button
+                    const SizedBox(width: 64), // 76 -> 64
+                    // Right: AR Space
+                    Expanded(
+                      child: GestureDetector(
+                        onTap: () => Navigator.push(
+                          context,
+                          _slide(const ArViewScreen()),
+                        ).then((_) => _loadAssets()),
+                        behavior: HitTestBehavior.opaque,
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.view_in_ar_outlined, color: secondaryText, size: 22), // 24 -> 22
+                            const Gap(2),
+                            Text(
+                              "AR Space",
+                              style: GoogleFonts.jost(
+                                color: secondaryText,
+                                fontSize: 11, // 12.5 -> 11
+                                fontWeight: FontWeight.w500,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              
+              // Center Floating Action Button & Text
+              Positioned(
+                top: 0,
+                child: GestureDetector(
+                  onTap: () => Navigator.push(
+                    context,
+                    _slide(const UploadScreen()),
+                  ).then((_) => _loadAssets()),
+                  behavior: HitTestBehavior.opaque,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 48, // 54 -> 48
+                        height: 48,
+                        decoration: BoxDecoration(
+                          color: highlight,
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: highlight.withValues(alpha: 0.4),
+                              blurRadius: 12,
+                              offset: const Offset(0, 6),
+                            ),
+                          ],
+                        ),
+                        child: const Icon(
+                          Icons.add_rounded,
+                          color: Colors.white,
+                          size: 26, // 30 -> 26
+                        ),
+                      ),
+                      const Gap(2),
+                      Text(
+                        "Create",
+                        style: GoogleFonts.jost(
+                          color: mainDark,
+                          fontSize: 11, // 12.5 -> 11
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
