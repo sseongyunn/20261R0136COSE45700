@@ -17,6 +17,7 @@ class _AuthScreenState extends State<AuthScreen> {
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
   bool _isSignup = false;
+  bool _rememberMe = false;
   bool _loading = false;
   String? _error;
 
@@ -56,55 +57,213 @@ class _AuthScreenState extends State<AuthScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final height = MediaQuery.sizeOf(context).height;
+
     return Scaffold(
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28),
-          child: ConstrainedBox(
-            constraints: BoxConstraints(
-              minHeight:
-                  MediaQuery.sizeOf(context).height -
-                  MediaQuery.paddingOf(context).top -
-                  MediaQuery.paddingOf(context).bottom,
-            ),
+      resizeToAvoidBottomInset: false,
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: AuthColors.radialGradientPreset, // 1. 은은한 베이지~그레이/화이트 radial gradient
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 28), // 1. 좌우 여백 (28dp)
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start, // 1. 좌측 정렬 중심
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                const Gap(28),
-                const _Logo(),
-                const Gap(72),
-                Text(
-                  _isSignup ? '계정을 만들고\n3D 생성을 시작하세요' : '로그인하고\n내 모델을 확인하세요',
-                  style: GoogleFonts.nunito(
-                    fontSize: 32,
-                    fontWeight: FontWeight.w800,
-                    color: AppColors.textPrimary,
-                    height: 1.2,
-                  ),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Gap(16),
+                    const _Logo(),
+                    Gap(height * 0.10), // 2. 타이틀 위치: 상단 약 1/4 지점
+                    Text(
+                      _isSignup ? 'Create\nyour account' : 'Log into\nyour account',
+                      style: GoogleFonts.outfit(
+                        fontSize: 40,
+                        fontWeight: FontWeight.w200, // 미니멀한 얇고 감각적인 두께
+                        color: Colors.white,
+                        height: 1.15,
+                      ),
+                    ),
+                    const Gap(80),
+                    // 3. Username/Email 입력 필드 (Underline 스타일)
+                    _UnderlineInput(
+                      controller: _emailController,
+                      hintText: 'Username/Email',
+                      icon: Icons.mail_outline_rounded,
+                      keyboardType: TextInputType.emailAddress,
+                    ),
+                    const Gap(20),
+                    // 3. Password 입력 필드 (Underline 스타일) & Forgot? 버튼 Baseline 배치
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        Expanded(
+                          child: _UnderlineInput(
+                            controller: _passwordController,
+                            hintText: 'Password',
+                            icon: Icons.lock_outline_rounded,
+                            obscureText: true,
+                          ),
+                        ),
+                        if (!_isSignup) ...[
+                          TextButton(
+                            onPressed: () {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                const SnackBar(
+                                  content: Text('비밀번호 찾기 기능은 아직 지원되지 않습니다.'),
+                                ),
+                              );
+                            },
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              minimumSize: Size.zero,
+                              tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            ),
+                            child: Text(
+                              'Forgot?',
+                              style: GoogleFonts.outfit(
+                                color: Colors.white70,
+                                fontWeight: FontWeight.w300,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                    const Gap(24),
+                    // 3. 옵션 영역 (Remember me)
+                    if (!_isSignup) ...[
+                      Row(
+                        children: [
+                          GestureDetector(
+                            onTap: () {
+                              setState(() {
+                                _rememberMe = !_rememberMe;
+                              });
+                            },
+                            child: Container(
+                              width: 18,
+                              height: 18,
+                              decoration: BoxDecoration(
+                                color: Colors.white,
+                                borderRadius: BorderRadius.circular(4), // 모서리가 살짝 둥근 사각
+                              ),
+                              child: _rememberMe
+                                  ? const Icon(
+                                      Icons.check,
+                                      size: 14,
+                                      color: Color(0xFF6E5F4F),
+                                    )
+                                  : null,
+                            ),
+                          ),
+                          const Gap(8),
+                          Text(
+                            'Remember me',
+                            style: GoogleFonts.outfit(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w300,
+                              color: Colors.white.withValues(alpha: 0.7),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                    if (_error != null) ...[
+                      const Gap(16),
+                      _ErrorBox(message: _error!),
+                    ],
+                    const Gap(40),
+                    // 4. 기본 로그인 버튼 (Log In/Sign Up, Capsule/Pill-shaped, Charcoal, Drop Shadow)
+                    GestureDetector(
+                      onTap: _loading ? null : _submit,
+                      child: Container(
+                        height: 54,
+                        width: double.infinity,
+                        decoration: BoxDecoration(
+                          color: AuthColors.charcoalButton, // #2A2A2E 내외
+                          borderRadius: BorderRadius.circular(27), // 캡슐 형태
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.25),
+                              blurRadius: 12,
+                              offset: const Offset(0, 6), // 부드럽고 은은한 드롭 섀도우
+                            ),
+                          ],
+                        ),
+                        child: Center(
+                          child: _loading
+                              ? const SizedBox(
+                                  width: 20,
+                                  height: 20,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : Text(
+                                  _isSignup ? 'Sign Up' : 'Log In',
+                                  style: GoogleFonts.outfit(
+                                    fontSize: 16,
+                                    fontWeight: FontWeight.w500,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-                const Gap(14),
-                Text(
-                  '사진 업로드부터 GLB 다운로드 URL까지\n한 흐름으로 관리합니다.',
-                  style: GoogleFonts.nunito(
-                    fontSize: 15,
-                    color: AppColors.textSecondary,
-                    height: 1.55,
-                  ),
+                // 5. 하단 푸터 (Don't have an account? Sign Up, 좌측 정렬, 밑줄)
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Gap(24),
+                    TextButton(
+                      onPressed: _loading
+                          ? null
+                          : () => setState(() {
+                                _isSignup = !_isSignup;
+                                _error = null;
+                              }),
+                      style: TextButton.styleFrom(
+                        padding: EdgeInsets.zero,
+                        alignment: Alignment.centerLeft,
+                      ),
+                      child: RichText(
+                        text: TextSpan(
+                          style: GoogleFonts.outfit(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w300,
+                            color: Colors.white.withValues(alpha: 0.7),
+                          ),
+                          children: [
+                            TextSpan(
+                              text: _isSignup
+                                  ? 'Already have an account? '
+                                  : "Don't have an account? ",
+                            ),
+                            TextSpan(
+                              text: _isSignup ? 'Log In' : 'Sign Up',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w500,
+                                decoration: TextDecoration.underline,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const Gap(16),
+                  ],
                 ),
-                const Gap(34),
-                _AuthCard(
-                  emailController: _emailController,
-                  passwordController: _passwordController,
-                  loading: _loading,
-                  isSignup: _isSignup,
-                  error: _error,
-                  onSubmit: _submit,
-                  onToggle: () => setState(() {
-                    _isSignup = !_isSignup;
-                    _error = null;
-                  }),
-                ),
-                const Gap(24),
               ],
             ),
           ),
@@ -121,26 +280,18 @@ class _Logo extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Container(
-          padding: const EdgeInsets.all(9),
-          decoration: BoxDecoration(
-            color: AppColors.card,
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.border),
-          ),
-          child: const Icon(
-            Icons.chair_outlined,
-            color: AppColors.primary,
-            size: 20,
-          ),
+        const Icon(
+          Icons.chair_outlined,
+          color: Colors.white,
+          size: 24,
         ),
-        const Gap(10),
+        const Gap(8),
         Text(
           'furniFit',
-          style: GoogleFonts.nunito(
-            fontSize: 22,
-            fontWeight: FontWeight.w800,
-            color: AppColors.textPrimary,
+          style: GoogleFonts.outfit(
+            fontSize: 20,
+            fontWeight: FontWeight.w400,
+            color: Colors.white,
           ),
         ),
       ],
@@ -148,112 +299,16 @@ class _Logo extends StatelessWidget {
   }
 }
 
-class _AuthCard extends StatelessWidget {
-  final TextEditingController emailController;
-  final TextEditingController passwordController;
-  final bool loading;
-  final bool isSignup;
-  final String? error;
-  final VoidCallback onSubmit;
-  final VoidCallback onToggle;
-
-  const _AuthCard({
-    required this.emailController,
-    required this.passwordController,
-    required this.loading,
-    required this.isSignup,
-    required this.error,
-    required this.onSubmit,
-    required this.onToggle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: AppColors.card,
-        borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.border),
-      ),
-      child: Column(
-        children: [
-          _TextInput(
-            controller: emailController,
-            label: '이메일',
-            icon: Icons.mail_outline_rounded,
-            keyboardType: TextInputType.emailAddress,
-          ),
-          const Gap(12),
-          _TextInput(
-            controller: passwordController,
-            label: '비밀번호',
-            icon: Icons.lock_outline_rounded,
-            obscureText: true,
-          ),
-          if (error != null) ...[const Gap(14), _ErrorBox(message: error!)],
-          const Gap(18),
-          GestureDetector(
-            onTap: loading ? null : onSubmit,
-            child: AnimatedContainer(
-              duration: const Duration(milliseconds: 250),
-              height: 56,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppColors.primary, AppColors.accent],
-                  begin: Alignment.centerLeft,
-                  end: Alignment.centerRight,
-                ),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Center(
-                child: loading
-                    ? const SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 2,
-                          color: Colors.white,
-                        ),
-                      )
-                    : Text(
-                        isSignup ? '가입하기' : '로그인',
-                        style: GoogleFonts.nunito(
-                          fontSize: 16,
-                          fontWeight: FontWeight.w800,
-                          color: Colors.white,
-                        ),
-                      ),
-              ),
-            ),
-          ),
-          const Gap(12),
-          TextButton(
-            onPressed: loading ? null : onToggle,
-            child: Text(
-              isSignup ? '이미 계정이 있나요? 로그인' : '처음이신가요? 계정 만들기',
-              style: GoogleFonts.nunito(
-                fontSize: 14,
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _TextInput extends StatelessWidget {
+class _UnderlineInput extends StatelessWidget {
   final TextEditingController controller;
-  final String label;
+  final String hintText;
   final IconData icon;
   final bool obscureText;
   final TextInputType? keyboardType;
 
-  const _TextInput({
+  const _UnderlineInput({
     required this.controller,
-    required this.label,
+    required this.hintText,
     required this.icon,
     this.obscureText = false,
     this.keyboardType,
@@ -265,20 +320,21 @@ class _TextInput extends StatelessWidget {
       controller: controller,
       obscureText: obscureText,
       keyboardType: keyboardType,
-      style: GoogleFonts.nunito(fontSize: 15, color: AppColors.textPrimary),
+      style: GoogleFonts.outfit(fontSize: 16, fontWeight: FontWeight.w300, color: Colors.white),
+      cursorColor: Colors.white,
       decoration: InputDecoration(
-        labelText: label,
-        labelStyle: GoogleFonts.nunito(color: AppColors.textTertiary),
-        prefixIcon: Icon(icon, color: AppColors.textSecondary, size: 20),
-        filled: true,
-        fillColor: AppColors.surface,
-        enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColors.border),
+        hintText: hintText,
+        hintStyle: GoogleFonts.outfit(
+          color: Colors.white.withValues(alpha: 0.6),
+          fontWeight: FontWeight.w300,
         ),
-        focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
-          borderSide: const BorderSide(color: AppColors.primary),
+        prefixIcon: Icon(icon, color: Colors.white70, size: 20),
+        filled: false, // 채우기 없이
+        enabledBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Colors.white38, width: 1.0), // 반투명 화이트 밑줄
+        ),
+        focusedBorder: const UnderlineInputBorder(
+          borderSide: BorderSide(color: Colors.white, width: 1.5),
         ),
       ),
     );
@@ -296,15 +352,16 @@ class _ErrorBox extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF3A1D1D),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF693131)),
+        color: const Color(0x2BFFB8A8),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white38),
       ),
       child: Text(
         message,
-        style: GoogleFonts.nunito(
+        style: GoogleFonts.outfit(
           fontSize: 13,
-          color: const Color(0xFFFFB8A8),
+          fontWeight: FontWeight.w300,
+          color: Colors.white,
           height: 1.4,
         ),
       ),

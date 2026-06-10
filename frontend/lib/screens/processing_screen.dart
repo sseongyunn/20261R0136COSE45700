@@ -153,78 +153,95 @@ class _ProcessingScreenState extends State<ProcessingScreen>
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text('AI 처리 중'),
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: AuthColors.radialGradientPreset,
       ),
-      body: SafeArea(
-        child: CustomScrollView(
-          slivers: [
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: Padding(
-                padding: const EdgeInsets.all(28),
-                child: Column(
-                  children: [
-                    const Spacer(),
-                    _PulseOrb(controller: _pulse),
-                    const Gap(32),
-                    Text(
-                      '변환하고 있어요',
-                      style: GoogleFonts.nunito(
-                        fontSize: 24,
-                        fontWeight: FontWeight.w800,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const Gap(8),
-                    Text(
-                      '현재 상태: $_status',
-                      style: GoogleFonts.nunito(
-                        fontSize: 15,
-                        color: AppColors.textSecondary,
-                      ),
-                    ),
-                    if (_error != null) ...[
-                      const Gap(14),
-                      _ErrorBox(message: _error!),
-                    ],
-                    const Spacer(),
-                    _StepList(currentStep: _step, steps: _steps),
-                    const Spacer(),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        TextButton(
-                          onPressed: _polling ? null : _refresh,
-                          child: Text(
-                            _polling ? '확인 중' : '새로고침',
-                            style: GoogleFonts.nunito(
-                              fontSize: 15,
-                              color: AppColors.textSecondary,
-                            ),
-                          ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          automaticallyImplyLeading: false,
+          title: Text(
+            'AI 처리 중',
+            style: GoogleFonts.outfit(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
+            ),
+          ),
+        ),
+        body: SafeArea(
+          child: CustomScrollView(
+            slivers: [
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: Padding(
+                  padding: const EdgeInsets.all(28),
+                  child: Column(
+                    children: [
+                      const Spacer(),
+                      _PulseOrb(controller: _pulse),
+                      const Gap(32),
+                      Text(
+                        '변환하고 있어요',
+                        style: GoogleFonts.outfit(
+                          fontSize: 24,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
                         ),
-                        const Gap(12),
-                        TextButton(
-                          onPressed: () => Navigator.pop(context),
-                          child: Text(
-                            '닫기',
-                            style: GoogleFonts.nunito(
-                              fontSize: 15,
-                              color: AppColors.textTertiary,
-                            ),
-                          ),
+                      ),
+                      const Gap(8),
+                      Text(
+                        '현재 상태: $_status',
+                        style: GoogleFonts.outfit(
+                          fontSize: 15,
+                          color: Colors.white.withValues(alpha: 0.7),
                         ),
+                      ),
+                      if (_error != null) ...[
+                        const Gap(14),
+                        _ErrorBox(message: _error!),
                       ],
-                    ),
-                    const Gap(4),
-                  ],
+                      const Spacer(),
+                      _StepList(currentStep: _step, steps: _steps),
+                      const Spacer(),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          TextButton(
+                            onPressed: _polling ? null : _refresh,
+                            child: Text(
+                              _polling ? '확인 중' : '새로고침',
+                              style: GoogleFonts.outfit(
+                                fontSize: 15,
+                                color: Colors.white.withValues(alpha: 0.8),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ),
+                          const Gap(12),
+                          TextButton(
+                            onPressed: () => Navigator.pop(context),
+                            child: Text(
+                              '닫기',
+                              style: GoogleFonts.outfit(
+                                fontSize: 15,
+                                color: Colors.white.withValues(alpha: 0.6),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const Gap(4),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -251,10 +268,10 @@ class _PulseOrb extends StatelessWidget {
             height: 96,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: const Color(0xFF2C1810),
+              color: Colors.transparent,
               boxShadow: [
                 BoxShadow(
-                  color: AppColors.primary.withValues(alpha: 0.35),
+                  color: const Color(0xFFD3AD97).withValues(alpha: 0.35),
                   blurRadius: glow,
                   spreadRadius: 4,
                 ),
@@ -262,7 +279,7 @@ class _PulseOrb extends StatelessWidget {
             ),
             child: const Icon(
               Icons.auto_awesome_rounded,
-              color: AppColors.primary,
+              color: Color(0xFFD3AD97),
               size: 40,
             ),
           ),
@@ -283,9 +300,9 @@ class _StepList extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        color: AppColors.card,
+        color: Colors.white.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
       ),
       child: Column(
         children: List.generate(steps.length, (i) {
@@ -336,16 +353,16 @@ class _StepRow extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   color: done
-                      ? AppColors.success
+                      ? const Color(0xFF2884B8).withValues(alpha: 0.50)
                       : active
-                      ? AppColors.primary.withValues(alpha: 0.15)
-                      : AppColors.border,
+                      ? const Color(0xFFD3AD97).withValues(alpha: 0.15)
+                      : Colors.white.withValues(alpha: 0.1),
                   border: Border.all(
                     color: done
-                        ? AppColors.success
+                        ? const Color(0xFF2884B8).withValues(alpha: 0.50)
                         : active
-                        ? AppColors.primary
-                        : AppColors.textTertiary.withValues(alpha: 0.3),
+                        ? const Color(0xFFD3AD97)
+                        : Colors.white.withValues(alpha: 0.25),
                     width: 1.5,
                   ),
                 ),
@@ -360,7 +377,7 @@ class _StepRow extends StatelessWidget {
                         padding: EdgeInsets.all(7),
                         child: CircularProgressIndicator(
                           strokeWidth: 2,
-                          color: AppColors.primary,
+                          color: Color(0xFFD3AD97),
                           backgroundColor: Colors.transparent,
                         ),
                       )
@@ -372,8 +389,8 @@ class _StepRow extends StatelessWidget {
                   height: 14,
                   margin: const EdgeInsets.symmetric(vertical: 3),
                   color: done
-                      ? AppColors.success.withValues(alpha: 0.35)
-                      : AppColors.border,
+                      ? const Color(0xFF2884B8).withValues(alpha: 0.35)
+                      : Colors.white.withValues(alpha: 0.2),
                 ),
             ],
           ),
@@ -386,21 +403,21 @@ class _StepRow extends StatelessWidget {
                 children: [
                   Text(
                     title,
-                    style: GoogleFonts.nunito(
+                    style: GoogleFonts.outfit(
                       fontSize: 14,
                       fontWeight: FontWeight.w700,
                       color: done || active
-                          ? AppColors.textPrimary
-                          : AppColors.textTertiary,
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.4),
                     ),
                   ),
                   if (active) ...[
                     const Gap(2),
                     Text(
                       subtitle,
-                      style: GoogleFonts.nunito(
+                      style: GoogleFonts.outfit(
                         fontSize: 12,
-                        color: AppColors.textSecondary,
+                        color: Colors.white.withValues(alpha: 0.7),
                       ),
                     ),
                   ],
@@ -413,19 +430,19 @@ class _StepRow extends StatelessWidget {
             child: done
                 ? Text(
                     '완료',
-                    style: GoogleFonts.nunito(
+                    style: GoogleFonts.outfit(
                       fontSize: 12,
                       fontWeight: FontWeight.w600,
-                      color: AppColors.success,
+                      color: const Color(0xFF2884B8),
                     ),
                   )
                 : active
                 ? const SizedBox.shrink()
                 : Text(
                     '대기',
-                    style: GoogleFonts.nunito(
+                    style: GoogleFonts.outfit(
                       fontSize: 12,
-                      color: AppColors.textTertiary,
+                      color: Colors.white.withValues(alpha: 0.4),
                     ),
                   ),
           ),
@@ -446,16 +463,17 @@ class _ErrorBox extends StatelessWidget {
       width: double.infinity,
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF3A1D1D),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFF693131)),
+        color: const Color(0x2BFFB8A8),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.white38),
       ),
       child: Text(
         message,
         textAlign: TextAlign.center,
-        style: GoogleFonts.nunito(
+        style: GoogleFonts.outfit(
           fontSize: 13,
-          color: const Color(0xFFFFB8A8),
+          fontWeight: FontWeight.w300,
+          color: Colors.white,
           height: 1.35,
         ),
       ),

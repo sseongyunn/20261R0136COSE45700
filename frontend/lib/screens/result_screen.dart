@@ -50,6 +50,7 @@ class _ResultScreenState extends State<ResultScreen> {
         builder: (_) => ModelUrlScreen(
           assetId: assetId,
           initialModelUrl: widget.model.modelUrl,
+          modelName: widget.model.name,
         ),
       ),
     );
@@ -78,7 +79,7 @@ class _ResultScreenState extends State<ResultScreen> {
       SnackBar(
         content: Text(
           message,
-          style: GoogleFonts.nunito(color: AppColors.textPrimary),
+          style: GoogleFonts.outfit(color: Colors.white),
         ),
       ),
     );
@@ -87,43 +88,60 @@ class _ResultScreenState extends State<ResultScreen> {
   @override
   Widget build(BuildContext context) {
     final m = widget.model;
-    return Scaffold(
-      appBar: AppBar(
-        automaticallyImplyLeading: false,
-        title: const Text('3D 모델 완성!'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).popUntil((r) => r.isFirst),
-            child: Text(
-              '홈으로',
-              style: GoogleFonts.nunito(
-                fontSize: 14,
-                color: AppColors.textSecondary,
-              ),
+    return Container(
+      decoration: const BoxDecoration(
+        gradient: AuthColors.radialGradientPreset,
+      ),
+      child: Scaffold(
+        backgroundColor: Colors.transparent,
+        appBar: AppBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          scrolledUnderElevation: 0,
+          automaticallyImplyLeading: false,
+          title: Text(
+            '3D 모델 완성!',
+            style: GoogleFonts.outfit(
+              fontSize: 18,
+              fontWeight: FontWeight.w600,
+              color: Colors.white,
             ),
           ),
-        ],
-      ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _ModelViewer(model: m),
-              const Gap(20),
-              _DetailsCard(model: m),
-              const Gap(16),
-              _ActionRow(
-                onShare: () => _copyModelUrl(),
-                onDownload: _openModelUrl,
-                onRegenerate: () => Navigator.pop(context),
-                onAr: _openAR,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).popUntil((r) => r.isFirst),
+              child: Text(
+                '홈으로',
+                style: GoogleFonts.outfit(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.8),
+                ),
               ),
-              const Gap(24),
-              _SaveButton(onTap: _openGallery),
-              const Gap(8),
-            ],
+            ),
+          ],
+        ),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _ModelViewer(model: m),
+                const Gap(20),
+                _DetailsCard(model: m),
+                const Gap(16),
+                _ActionRow(
+                  onShare: () => _copyModelUrl(),
+                  onDownload: _openModelUrl,
+                  onRegenerate: () => Navigator.pop(context),
+                  onAr: _openAR,
+                ),
+                const Gap(24),
+                _SaveButton(onTap: _openGallery),
+                const Gap(8),
+              ],
+            ),
           ),
         ),
       ),
@@ -176,7 +194,7 @@ class _ModelViewer extends StatelessWidget {
                 const Gap(6),
                 Text(
                   hasModel ? '3D 뷰어 · 드래그로 회전' : '2D 미리보기',
-                  style: GoogleFonts.nunito(
+                  style: GoogleFonts.outfit(
                     fontSize: 12,
                     fontWeight: FontWeight.w700,
                     color: Colors.white,
@@ -201,9 +219,9 @@ class _DetailsCard extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
-        color: AppColors.card,
+        color: Colors.white.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(22),
-        border: Border.all(color: AppColors.border),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -213,10 +231,10 @@ class _DetailsCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   model.name,
-                  style: GoogleFonts.nunito(
+                  style: GoogleFonts.outfit(
                     fontSize: 20,
                     fontWeight: FontWeight.w800,
-                    color: AppColors.textPrimary,
+                    color: Colors.white,
                   ),
                 ),
               ),
@@ -225,7 +243,7 @@ class _DetailsCard extends StatelessWidget {
             ],
           ),
           const Gap(18),
-          const Divider(color: AppColors.border, height: 1),
+          Divider(color: Colors.white.withValues(alpha: 0.15), height: 1),
           const Gap(18),
           Row(
             children: [
@@ -272,15 +290,15 @@ class _CategoryChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
       decoration: BoxDecoration(
-        color: AppColors.primary.withValues(alpha: 0.15),
+        color: AppColors.primary.withValues(alpha: 0.2),
         borderRadius: BorderRadius.circular(10),
       ),
       child: Text(
         label,
-        style: GoogleFonts.nunito(
+        style: GoogleFonts.outfit(
           fontSize: 13,
           fontWeight: FontWeight.w600,
-          color: AppColors.primary,
+          color: Colors.white,
         ),
       ),
     );
@@ -300,19 +318,19 @@ class _Detail extends StatelessWidget {
       children: [
         Text(
           label,
-          style: GoogleFonts.nunito(
+          style: GoogleFonts.outfit(
             fontSize: 12,
-            color: AppColors.textTertiary,
+            color: Colors.white.withValues(alpha: 0.65),
             letterSpacing: 0.3,
           ),
         ),
         const Gap(4),
         Text(
           value,
-          style: GoogleFonts.nunito(
+          style: GoogleFonts.outfit(
             fontSize: 15,
             fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
+            color: Colors.white,
           ),
         ),
       ],
@@ -367,7 +385,7 @@ class _ActionRow extends StatelessWidget {
                   const Gap(8),
                   Text(
                     'AR로 공간에 배치하기',
-                    style: GoogleFonts.nunito(
+                    style: GoogleFonts.outfit(
                       fontSize: 15,
                       fontWeight: FontWeight.w800,
                       color: Colors.white,
@@ -421,19 +439,19 @@ class _ActionBtn extends StatelessWidget {
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 14),
           decoration: BoxDecoration(
-            color: AppColors.card,
+            color: Colors.white.withValues(alpha: 0.15),
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.border),
+            border: Border.all(color: Colors.white.withValues(alpha: 0.2)),
           ),
           child: Column(
             children: [
-              Icon(icon, color: AppColors.textSecondary, size: 21),
+              Icon(icon, color: Colors.white.withValues(alpha: 0.8), size: 21),
               const Gap(5),
               Text(
                 label,
-                style: GoogleFonts.nunito(
+                style: GoogleFonts.outfit(
                   fontSize: 12,
-                  color: AppColors.textSecondary,
+                  color: Colors.white.withValues(alpha: 0.8),
                 ),
               ),
             ],
@@ -457,12 +475,31 @@ class _SaveButton extends StatelessWidget {
         duration: const Duration(milliseconds: 350),
         height: 58,
         decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [AppColors.primary, AppColors.accent],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
+          gradient: LinearGradient(
+            colors: [
+              const Color(0xFFBE6E43).withValues(alpha: 0.2),
+              const Color(0xFF7A3916).withValues(alpha: 0.2),
+            ],
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
           ),
           borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.2),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFFD4845A).withValues(alpha: 0.25),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.15),
+              blurRadius: 4,
+              offset: const Offset(0, 2),
+            ),
+          ],
         ),
         child: Center(
           child: Row(
@@ -476,7 +513,7 @@ class _SaveButton extends StatelessWidget {
               const Gap(8),
               Text(
                 '내 컬렉션 보기',
-                style: GoogleFonts.nunito(
+                style: GoogleFonts.outfit(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
                   color: Colors.white,
