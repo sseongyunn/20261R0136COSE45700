@@ -27,6 +27,10 @@ class _GalleryScreenState extends State<GalleryScreen> {
   List<String> activeCategories = ["All", "Chairs", "Sofas", "Beds", "Tables", "Lamps", "Cabinets"];
   String selectedCategory = "All";
 
+  final TextEditingController _searchController = TextEditingController();
+  String _searchQuery = "";
+  Timer? _debounceTimer;
+
   List<FurnitureAsset> _assets = [];
   Timer? _timer;
   bool _loading = true;
@@ -36,12 +40,24 @@ class _GalleryScreenState extends State<GalleryScreen> {
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(() {
+      if (_debounceTimer?.isActive ?? false) _debounceTimer!.cancel();
+      _debounceTimer = Timer(const Duration(milliseconds: 600), () {
+        if (mounted) {
+          setState(() {
+            _searchQuery = _searchController.text.toLowerCase();
+          });
+        }
+      });
+    });
     _refresh();
     _timer = Timer.periodic(const Duration(seconds: 5), (_) => _refresh());
   }
 
   @override
   void dispose() {
+    _searchController.dispose();
+    _debounceTimer?.cancel();
     _timer?.cancel();
     super.dispose();
   }
@@ -114,20 +130,90 @@ class _GalleryScreenState extends State<GalleryScreen> {
     }
   }
 
+  bool _matchesSearchQuery(String target, String query) {
+    if (query.isEmpty) return true;
+    const chosungs = ["ㄱ", "ㄲ", "ㄴ", "ㄷ", "ㄸ", "ㄹ", "ㅁ", "ㅂ", "ㅃ", "ㅅ", "ㅆ", "ㅇ", "ㅈ", "ㅉ", "ㅊ", "ㅋ", "ㅌ", "ㅍ", "ㅎ"];
+    const jongToCho = {1: 0, 2: 1, 4: 2, 7: 3, 8: 5, 16: 6, 17: 7, 19: 9, 20: 10, 21: 11, 22: 12, 23: 14, 24: 15, 25: 16, 26: 17, 27: 18};
+    
+    String pattern = "";
+    for (int i = 0; i < query.length; i++) {
+      String c = query[i];
+      int code = c.codeUnitAt(0);
+
+      if (code >= 0x3131 && code <= 0x314E) {
+        int index = chosungs.indexOf(c);
+        if (index != -1) {
+          int start = 0xAC00 + index * 588;
+          int end = start + 587;
+          pattern += "[$c${String.fromCharCode(start)}-${String.fromCharCode(end)}]";
+        } else {
+          pattern += RegExp.escape(c);
+        }
+      } else if (code >= 0xAC00 && code <= 0xD7A3) {
+        int offset = code - 0xAC00;
+        int jong = offset % 28;
+        int choJung = code - jong;
+        
+        if (jong == 0) {
+          pattern += "[$c-${String.fromCharCode(code + 27)}]";
+        } else {
+          String exact = RegExp.escape(c);
+          if (jongToCho.containsKey(jong)) {
+            int choIndex = jongToCho[jong]!;
+            int nextChoStart = 0xAC00 + choIndex * 588;
+            int nextChoEnd = nextChoStart + 587;
+            String nextRegex = "[${chosungs[choIndex]}${String.fromCharCode(nextChoStart)}-${String.fromCharCode(nextChoEnd)}]";
+            String charChoJung = String.fromCharCode(choJung);
+            pattern += "(?:$exact|[$charChoJung-${String.fromCharCode(choJung + 27)}]$nextRegex)";
+          } else {
+            pattern += exact;
+          }
+        }
+      } else {
+        pattern += RegExp.escape(c);
+      }
+    }
+
+    try {
+      final regExp = RegExp(pattern, caseSensitive: false);
+      return regExp.hasMatch(target);
+    } catch (e) {
+      return target.toLowerCase().contains(query.toLowerCase());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final pending = context.watch<PendingJobsProvider>().jobs;
 
     final filteredPending = pending.where((job) {
-      if (selectedCategory == "All") return true;
-      final norm = _normalizeCategory(job.category);
-      return norm == selectedCategory;
+      if (selectedCategory != "All") {
+        final norm = _normalizeCategory(job.category);
+        if (norm != selectedCategory) return false;
+      }
+      if (_searchQuery.isNotEmpty) {
+        final matchName = _matchesSearchQuery(job.name, _searchQuery);
+        final matchCategory = _matchesSearchQuery(job.category, _searchQuery);
+        if (!matchName && !matchCategory) {
+          return false;
+        }
+      }
+      return true;
     }).toList();
 
     final filteredAssets = _assets.where((asset) {
-      if (selectedCategory == "All") return true;
-      final norm = _normalizeCategory(asset.category);
-      return norm == selectedCategory;
+      if (selectedCategory != "All") {
+        final norm = _normalizeCategory(asset.category);
+        if (norm != selectedCategory) return false;
+      }
+      if (_searchQuery.isNotEmpty) {
+        final matchName = _matchesSearchQuery(asset.displayName, _searchQuery);
+        final matchCategory = asset.category != null ? _matchesSearchQuery(asset.category!, _searchQuery) : false;
+        if (!matchName && !matchCategory) {
+          return false;
+        }
+      }
+      return true;
     }).toList();
 
     final totalCount = filteredAssets.length + filteredPending.length;
@@ -252,15 +338,34 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   children: [
                     const Icon(Icons.search, color: Colors.white70, size: 22),
                     const Gap(12),
-                    Text(
-                      "Search your 3D models...",
-                      style: GoogleFonts.outfit(
-                        color: Colors.white.withValues(alpha: 0.4),
-                        fontWeight: FontWeight.w300,
+                    Expanded(
+                      child: TextField(
+                        controller: _searchController,
+                        style: GoogleFonts.outfit(color: Colors.white, fontWeight: FontWeight.w400, fontSize: 14),
+                        decoration: InputDecoration(
+                          hintText: "Search your 3D models...",
+                          hintStyle: GoogleFonts.outfit(
+                            color: Colors.white.withValues(alpha: 0.4),
+                            fontWeight: FontWeight.w300,
+                            fontSize: 14,
+                          ),
+                          border: InputBorder.none,
+                          isDense: true,
+                          contentPadding: EdgeInsets.zero,
+                        ),
+                        cursorColor: const Color(0xFFD3AD97),
                       ),
                     ),
-                    const Spacer(),
-                    const Icon(Icons.tune, color: Colors.white70, size: 22),
+                    if (_searchQuery.isNotEmpty)
+                      GestureDetector(
+                        onTap: () {
+                          _searchController.clear();
+                          FocusScope.of(context).unfocus();
+                        },
+                        child: const Icon(Icons.close, color: Colors.white70, size: 20),
+                      ),
+                    if (_searchQuery.isEmpty)
+                      const Icon(Icons.tune, color: Colors.white70, size: 22),
                   ],
                 ),
               ),
@@ -299,7 +404,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
                   : _error != null
                       ? _ErrorState(message: _error!, onRetry: _refresh)
                       : filteredAssets.isEmpty && filteredPending.isEmpty
-                          ? const _EmptyState()
+                          ? (_searchQuery.isNotEmpty ? const _SearchEmptyState() : const _EmptyState())
                           : GridView.builder(
                               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
                               gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
@@ -706,6 +811,62 @@ class _EmptyState extends StatelessWidget {
             const Gap(10),
             Text(
               '가구 사진을 업로드해서\n첫 번째 3D GLB 모델을 만들어보세요',
+              textAlign: TextAlign.center,
+              style: GoogleFonts.outfit(
+                fontSize: 13,
+                fontWeight: FontWeight.w300,
+                color: Colors.white.withValues(alpha: 0.7),
+                height: 1.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SearchEmptyState extends StatelessWidget {
+  const _SearchEmptyState();
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        margin: const EdgeInsets.symmetric(horizontal: 32),
+        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 32),
+        decoration: BoxDecoration(
+          color: Colors.white.withValues(alpha: 0.12),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.15)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.search_off_rounded,
+                color: Colors.white,
+                size: 36,
+              ),
+            ),
+            const Gap(20),
+            Text(
+              '검색된 모델이 없어요',
+              style: GoogleFonts.outfit(
+                fontSize: 18,
+                fontWeight: FontWeight.w800,
+                color: Colors.white,
+              ),
+            ),
+            const Gap(10),
+            Text(
+              '다른 검색어를 입력해 보세요',
               textAlign: TextAlign.center,
               style: GoogleFonts.outfit(
                 fontSize: 13,
