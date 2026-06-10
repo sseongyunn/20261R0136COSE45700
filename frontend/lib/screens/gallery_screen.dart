@@ -23,6 +23,10 @@ class GalleryScreen extends StatefulWidget {
 }
 
 class _GalleryScreenState extends State<GalleryScreen> {
+  final List<String> baseCategories = const ["All", "Chairs", "Sofas", "Beds", "Tables", "Lamps", "Cabinets"];
+  List<String> activeCategories = ["All", "Chairs", "Sofas", "Beds", "Tables", "Lamps", "Cabinets"];
+  String selectedCategory = "All";
+
   List<FurnitureAsset> _assets = [];
   Timer? _timer;
   bool _loading = true;
@@ -40,6 +44,23 @@ class _GalleryScreenState extends State<GalleryScreen> {
   void dispose() {
     _timer?.cancel();
     super.dispose();
+  }
+
+  String _normalizeCategory(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return 'Others';
+    final clean = raw.trim().toLowerCase();
+    if (clean == 'chair' || clean == 'chairs') return 'Chairs';
+    if (clean == 'sofa' || clean == 'sofas' || clean == 'couch') return 'Sofas';
+    if (clean == 'bed' || clean == 'beds') return 'Beds';
+    if (clean == 'table' || clean == 'tables' || clean == 'desk') return 'Tables';
+    if (clean == 'lamp' || clean == 'lamps' || clean == 'light') return 'Lamps';
+    if (clean == 'cabinet' || clean == 'cabinets' || clean == 'sideboard') return 'Cabinets';
+
+    final capitalized = raw.trim()[0].toUpperCase() + raw.trim().substring(1);
+    if (capitalized.toLowerCase().endsWith('s')) {
+      return capitalized;
+    }
+    return '${capitalized}s';
   }
 
   Future<void> _refresh() async {
@@ -69,7 +90,22 @@ class _GalleryScreenState extends State<GalleryScreen> {
 
       final assets = await api.listFurnitureAssets();
       if (!mounted) return;
-      setState(() => _assets = assets);
+
+      final Set<String> customCats = {};
+      for (final asset in assets) {
+        final norm = _normalizeCategory(asset.category);
+        if (!baseCategories.contains(norm)) {
+          customCats.add(norm);
+        }
+      }
+
+      setState(() {
+        _assets = assets;
+        activeCategories = [...baseCategories, ...customCats.toList()..sort()];
+        if (!activeCategories.contains(selectedCategory)) {
+          selectedCategory = "All";
+        }
+      });
     } catch (error) {
       if (mounted) setState(() => _error = error.toString());
     } finally {
@@ -81,7 +117,20 @@ class _GalleryScreenState extends State<GalleryScreen> {
   @override
   Widget build(BuildContext context) {
     final pending = context.watch<PendingJobsProvider>().jobs;
-    final totalCount = _assets.length + pending.length;
+
+    final filteredPending = pending.where((job) {
+      if (selectedCategory == "All") return true;
+      final norm = _normalizeCategory(job.category);
+      return norm == selectedCategory;
+    }).toList();
+
+    final filteredAssets = _assets.where((asset) {
+      if (selectedCategory == "All") return true;
+      final norm = _normalizeCategory(asset.category);
+      return norm == selectedCategory;
+    }).toList();
+
+    final totalCount = filteredAssets.length + filteredPending.length;
 
     return Container(
       decoration: const BoxDecoration(
@@ -111,7 +160,7 @@ class _GalleryScreenState extends State<GalleryScreen> {
               if (totalCount > 0) ...[
                 const Gap(2),
                 Text(
-                  '${_assets.length}개 완료 · ${pending.where((job) => job.isRunning).length}개 생성 중',
+                  '${filteredAssets.length}개 완료 · ${filteredPending.where((job) => job.isRunning).length}개 생성 중',
                   style: GoogleFonts.outfit(
                     fontSize: 12,
                     color: Colors.white.withValues(alpha: 0.65),
@@ -169,43 +218,107 @@ class _GalleryScreenState extends State<GalleryScreen> {
             child: const Icon(Icons.add_rounded, size: 28),
           ),
         ),
-        body: _loading
-            ? Center(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const CircularProgressIndicator(color: AppColors.primary),
-                    const Gap(16),
-                    Text(
-                      '컬렉션을 불러오는 중...',
-                      style: GoogleFonts.outfit(
-                        color: Colors.white.withValues(alpha: 0.75),
-                        fontSize: 14,
-                      ),
-                    ),
+        body: Column(
+          children: [
+            // 검색창 (캡슐 스타일)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20),
+                height: 52,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.white.withValues(alpha: 0.12),
+                      Colors.white.withValues(alpha: 0.06),
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(20),
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.15),
+                    width: 1.2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.02),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    )
                   ],
                 ),
-              )
-            : _error != null
-                ? _ErrorState(message: _error!, onRetry: _refresh)
-                : _assets.isEmpty && pending.isEmpty
-                    ? const _EmptyState()
-                    : GridView.builder(
-                        padding: const EdgeInsets.all(20),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          crossAxisSpacing: 12,
-                          mainAxisSpacing: 12,
-                          childAspectRatio: 0.78,
-                        ),
-                        itemCount: pending.length + _assets.length,
-                        itemBuilder: (_, i) {
-                          if (i < pending.length) {
-                            return _PendingJobCard(job: pending[i]);
-                          }
-                          return _AssetCard(asset: _assets[i - pending.length]);
-                        },
+                child: Row(
+                  children: [
+                    const Icon(Icons.search, color: Colors.white70, size: 22),
+                    const Gap(12),
+                    Text(
+                      "Search your 3D models...",
+                      style: GoogleFonts.outfit(
+                        color: Colors.white.withValues(alpha: 0.4),
+                        fontWeight: FontWeight.w300,
                       ),
+                    ),
+                    const Spacer(),
+                    const Icon(Icons.tune, color: Colors.white70, size: 22),
+                  ],
+                ),
+              ),
+            ),
+            const Gap(8),
+            // 카테고리 탭 영역
+            _CategoryTabs(
+              categories: activeCategories,
+              selectedCategory: selectedCategory,
+              onCategorySelected: (category) {
+                setState(() {
+                  selectedCategory = category;
+                });
+              },
+              highlight: const Color(0xFFD3AD97),
+            ),
+            const Gap(12),
+            Expanded(
+              child: _loading
+                  ? Center(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const CircularProgressIndicator(color: AppColors.primary),
+                          const Gap(16),
+                          Text(
+                            '컬렉션을 불러오는 중...',
+                            style: GoogleFonts.outfit(
+                              color: Colors.white.withValues(alpha: 0.75),
+                              fontSize: 14,
+                            ),
+                          ),
+                        ],
+                      ),
+                    )
+                  : _error != null
+                      ? _ErrorState(message: _error!, onRetry: _refresh)
+                      : filteredAssets.isEmpty && filteredPending.isEmpty
+                          ? const _EmptyState()
+                          : GridView.builder(
+                              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                              gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: 2,
+                                crossAxisSpacing: 12,
+                                mainAxisSpacing: 12,
+                                childAspectRatio: 0.78,
+                              ),
+                              itemCount: filteredPending.length + filteredAssets.length,
+                              itemBuilder: (_, i) {
+                                if (i < filteredPending.length) {
+                                  return _PendingJobCard(job: filteredPending[i]);
+                                }
+                                return _AssetCard(asset: filteredAssets[i - filteredPending.length]);
+                              },
+                            ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -651,6 +764,146 @@ class _ErrorState extends StatelessWidget {
                 style: GoogleFonts.outfit(
                   fontWeight: FontWeight.w600,
                   color: AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CategoryTabs extends StatefulWidget {
+  final List<String> categories;
+  final String selectedCategory;
+  final ValueChanged<String> onCategorySelected;
+  final Color highlight;
+
+  const _CategoryTabs({
+    required this.categories,
+    required this.selectedCategory,
+    required this.onCategorySelected,
+    required this.highlight,
+  });
+
+  @override
+  State<_CategoryTabs> createState() => _CategoryTabsState();
+}
+
+class _CategoryTabsState extends State<_CategoryTabs> {
+  final GlobalKey _parentKey = GlobalKey();
+  List<GlobalKey> _tabKeys = [];
+  double _indicatorLeft = 0;
+  double _indicatorWidth = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabKeys = List.generate(widget.categories.length, (_) => GlobalKey());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _updateIndicator());
+  }
+
+  @override
+  void didUpdateWidget(covariant _CategoryTabs oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.selectedCategory != widget.selectedCategory ||
+        oldWidget.categories != widget.categories) {
+      if (oldWidget.categories.length != widget.categories.length) {
+        _tabKeys = List.generate(widget.categories.length, (_) => GlobalKey());
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) => _updateIndicator());
+    }
+  }
+
+  void _updateIndicator() {
+    if (!mounted) return;
+    final index = widget.categories.indexOf(widget.selectedCategory);
+    if (index == -1 || _tabKeys.length <= index) return;
+
+    final RenderBox? parentRenderBox = _parentKey.currentContext?.findRenderObject() as RenderBox?;
+    final RenderBox? tabRenderBox = _tabKeys[index].currentContext?.findRenderObject() as RenderBox?;
+
+    if (parentRenderBox != null && tabRenderBox != null) {
+      final position = tabRenderBox.localToGlobal(Offset.zero, ancestor: parentRenderBox);
+      setState(() {
+        _indicatorLeft = position.dx;
+        _indicatorWidth = tabRenderBox.size.width;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isReady = _indicatorWidth > 0;
+
+    return ShaderMask(
+      shaderCallback: (Rect bounds) {
+        return const LinearGradient(
+          begin: Alignment.centerLeft,
+          end: Alignment.centerRight,
+          colors: [
+            Colors.white,
+            Colors.white,
+            Colors.transparent,
+          ],
+          stops: [0.0, 0.85, 1.0],
+        ).createShader(bounds);
+      },
+      blendMode: BlendMode.dstIn,
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        physics: const BouncingScrollPhysics(),
+        padding: const EdgeInsets.only(left: 20, right: 40),
+        child: Stack(
+          alignment: Alignment.bottomLeft,
+          clipBehavior: Clip.none,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(
+                key: _parentKey,
+                children: widget.categories.map((category) {
+                  final isSelected = widget.selectedCategory == category;
+                  final index = widget.categories.indexOf(category);
+                  return GestureDetector(
+                    key: _tabKeys[index],
+                    onTap: () => widget.onCategorySelected(category),
+                    behavior: HitTestBehavior.opaque,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      child: Text(
+                        category,
+                        style: GoogleFonts.jost(
+                          fontSize: isSelected ? 15 : 14,
+                          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w300,
+                          color: isSelected
+                              ? Colors.white
+                              : Colors.white.withValues(alpha: 0.4),
+                        ),
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+            AnimatedPositioned(
+              duration: isReady ? const Duration(milliseconds: 250) : Duration.zero,
+              curve: Curves.easeInOutCubic,
+              left: _indicatorLeft,
+              width: _indicatorWidth,
+              bottom: 2,
+              child: Opacity(
+                opacity: isReady ? 1.0 : 0.0,
+                child: Center(
+                  child: Container(
+                    width: 14,
+                    height: 3.5,
+                    decoration: BoxDecoration(
+                      color: widget.highlight,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
                 ),
               ),
             ),

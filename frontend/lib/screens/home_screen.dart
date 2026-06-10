@@ -9,6 +9,7 @@ import '../theme/app_theme.dart';
 import 'ar_view_screen.dart';
 import 'upload_screen.dart';
 import 'model_url_screen.dart';
+import 'gallery_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -18,8 +19,6 @@ class HomeScreen extends StatefulWidget {
 }
 
 class _HomeScreenState extends State<HomeScreen> {
-  String selectedCategory = "Chairs";
-
   // 기본 컬러 시스템 (유저 사양 및 기존 톤앤매너 유지)
   final Color mainDark = const Color(0xFF2A211D);     // 에스프레소 차콜
   final Color highlight = const Color(0xFFD3AD97);    // 웜 토프 베이지
@@ -27,8 +26,6 @@ class _HomeScreenState extends State<HomeScreen> {
   final Color iconBoxBg = const Color(0xFFEFEAE4).withValues(alpha: 0.4);     // 소프트 애시 베이지
   final Color secondaryText = const Color(0xFF8E847A); // 뮤트 타우프 그레이
 
-  final List<String> baseCategories = const ["Chairs", "Sofas", "Beds", "Tables", "Lamps", "Cabinets"];
-  List<String> activeCategories = ["Chairs", "Sofas", "Beds", "Tables", "Lamps", "Cabinets"];
   List<FurnitureAsset> _assets = [];
   bool _loading = true;
   String? _error;
@@ -50,20 +47,8 @@ class _HomeScreenState extends State<HomeScreen> {
       final assets = await api.listFurnitureAssets();
       if (!mounted) return;
 
-      final Set<String> customCats = {};
-      for (final asset in assets) {
-        final norm = _normalizeCategory(asset.category);
-        if (!baseCategories.contains(norm)) {
-          customCats.add(norm);
-        }
-      }
-
       setState(() {
         _assets = assets;
-        activeCategories = [...baseCategories, ...customCats.toList()..sort()];
-        if (!activeCategories.contains(selectedCategory)) {
-          selectedCategory = activeCategories.isNotEmpty ? activeCategories[0] : "Chairs";
-        }
         _loading = false;
       });
     } catch (e) {
@@ -76,26 +61,17 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  String _normalizeCategory(String? raw) {
-    if (raw == null || raw.trim().isEmpty) return 'Others';
-    final clean = raw.trim().toLowerCase();
-    if (clean == 'chair' || clean == 'chairs') return 'Chairs';
-    if (clean == 'sofa' || clean == 'sofas' || clean == 'couch') return 'Sofas';
-    if (clean == 'bed' || clean == 'beds') return 'Beds';
-    if (clean == 'table' || clean == 'tables' || clean == 'desk') return 'Tables';
-    if (clean == 'lamp' || clean == 'lamps' || clean == 'light') return 'Lamps';
-    if (clean == 'cabinet' || clean == 'cabinets' || clean == 'sideboard') return 'Cabinets';
-
-    final capitalized = raw.trim()[0].toUpperCase() + raw.trim().substring(1);
-    if (capitalized.toLowerCase().endsWith('s')) {
-      return capitalized;
+  String _getGreetingText() {
+    final hour = DateTime.now().hour;
+    if (hour >= 5 && hour < 12) {
+      return 'Good morning';
+    } else if (hour >= 12 && hour < 17) {
+      return 'Good afternoon';
+    } else if (hour >= 17 && hour < 22) {
+      return 'Good evening';
+    } else {
+      return 'Good night';
     }
-    return '${capitalized}s';
-  }
-
-  bool _matchesCategory(FurnitureAsset asset, String category) {
-    final normAsset = _normalizeCategory(asset.category);
-    return normAsset == category;
   }
 
   void _showLogoutDialog(BuildContext context) {
@@ -154,12 +130,31 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final api = context.watch<ApiClient>();
 
-    final currentAssets = _assets.where((asset) => _matchesCategory(asset, selectedCategory)).toList();
+    // Sort assets by createdAt descending (newest first), handling null cases.
+    final sortedAssets = List<FurnitureAsset>.from(_assets)
+      ..sort((a, b) {
+        if (a.createdAt == null && b.createdAt == null) return 0;
+        if (a.createdAt == null) return 1;
+        if (b.createdAt == null) return -1;
+        return b.createdAt!.compareTo(a.createdAt!);
+      });
+
+    final currentAssets = sortedAssets
+        .take(10)
+        .toList();
 
     // 사용자 이름 파싱 (이메일 앞자리)
     final username = api.email != null && api.email!.contains('@')
         ? api.email!.split('@')[0]
         : 'Seongyun';
+
+    // 히어로 카드 높이의 1/4을 퀵 액션 버튼의 높이로 설정
+    final double screenWidth = MediaQuery.of(context).size.width;
+    final double heroWidth = screenWidth - 48; // padding 24 * 2
+    final double heroHeight = heroWidth / 1.4;
+    final double buttonHeight = heroHeight / 4;
+    final double cardWidth = screenWidth * 0.25;
+    final double cardHeight = cardWidth / 0.78;
 
     return Scaffold(
       backgroundColor: Colors.white,
@@ -171,7 +166,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Gap(4),
+                    const Gap(2),
                     // 1. Header (아바타 및 웰컴 계정명)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -183,11 +178,12 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                "안녕하세요, $username님!",
+                                "${_getGreetingText()},\n$username!",
                                 style: GoogleFonts.jost(
-                                  color: secondaryText, // 5. 사용자 이메일 / 웰컴: 뮤트 타우프 그레이
-                                  fontSize: 14,
+                                  color: secondaryText,
+                                  fontSize: 12.5, // 14 -> 12.5 (90%)
                                   fontWeight: FontWeight.w300,
+                                  height: 1.25,
                                 ),
                               ),
                             ],
@@ -198,137 +194,443 @@ class _HomeScreenState extends State<HomeScreen> {
                               padding: const EdgeInsets.all(2),
                               decoration: BoxDecoration(
                                 shape: BoxShape.circle,
-                                border: Border.all(color: highlight.withValues(alpha: 0.5), width: 1.5),
+                                border: Border.all(color: highlight.withValues(alpha: 0.5), width: 1.2),
                               ),
                               child: CircleAvatar(
-                                radius: 24,
+                                radius: 16, // 18 -> 16 (90%)
                                 backgroundColor: Colors.white,
-                                child: Icon(Icons.person_rounded, color: highlight, size: 24),
+                                child: Icon(Icons.logout_rounded, color: highlight, size: 16), // 18 -> 16 (90%)
                               ),
                             ),
                           ),
                         ],
                       ),
                     ),
-                    const Gap(40),
+                    const Gap(20), // 40 -> 20 (상단 이동)
 
-                    // 2. 메인 타이틀 영역 (Headline: 크게 furniFit)
+                    // 2. 메인 타이틀 영역 (Headline: Bring furniture into your space)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Text(
-                        'furniFit',
-                        style: GoogleFonts.syne(
-                          fontSize: 56, // 48에서 56으로 더 크게 확대
-                          fontWeight: FontWeight.w700, // w800에서 w700으로 슬림화
+                        "Bring furniture \n into your space.",
+                        style: GoogleFonts.outfit(
+                          fontSize: 25, // 28 -> 25 (90%)
+                          fontWeight: FontWeight.w800, // bold하게 w800
                           color: mainDark,
-                          letterSpacing: -1.0,
-                          height: 1.1,
+                          letterSpacing: -0.5,
+                          height: 1.2,
                         ),
                       ),
                     ),
-                    const Gap(12),
+                    const Gap(8), // 12 -> 8 (상단 이동)
                     // 3. 본문 설명 서브 텍스트
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Text(
-                        'AI가 가구를 분석하고 입체 모델로 만들어드려요.\n인테리어를 상상이 아닌 눈으로 확인해보세요.',
+                        "사진으로 가구를 3D 모델로 만들고, \n AR로 직접 배치해보세요.",
                         style: GoogleFonts.jost(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w200,
-                          color: mainDark, // 1. 본문 설명 서브 텍스트: 딥 에스프레소 차콜
-                          height: 1.65,
+                          fontSize: 10.8, // 12 -> 10.8 (90%)
+                          fontWeight: FontWeight.w300,
+                          color: mainDark.withValues(alpha: 0.6), // 투명도를 높여 부드러운 톤 유지
+                          height: 1.6,
                         ),
                       ),
                     ),
 
-                    // 검색창 (캡슐 스타일)
-                    const Gap(24),
+                    // 3. 프리미엄 히어로 카드 & AR 공간 배치 카드 세션
+                    const Gap(16), // 24 -> 16 (상단 이동)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 20),
-                        height: 52,
-                        decoration: BoxDecoration(
-                          gradient: LinearGradient(
-                            colors: [
-                              const Color(0xFFD3AD97).withValues(alpha: 0.09),
-                              const Color(0xFFDBC9A9).withValues(alpha: 0.09),
-                            ],
-                            begin: Alignment.topLeft,
-                            end: Alignment.bottomRight,
-                          ),
-                          borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.3),
-                            width: 1.2,
-                          ),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.02),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            )
-                          ],
-                        ),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.search, color: Colors.grey, size: 22),
-                            const Gap(12),
-                            Text(
-                              "Search your 3D models...",
-                              style: GoogleFonts.jost(
-                                color: mainDark.withValues(alpha: 0.4),
-                                fontWeight: FontWeight.w300,
+                      child: AspectRatio(
+                        aspectRatio: 1.4,
+                        child: GestureDetector(
+                          onTap: () => Navigator.push(
+                            context,
+                            _slide(const UploadScreen()),
+                          ).then((_) => _loadAssets()),
+                          child: Container(
+                            clipBehavior: Clip.antiAlias,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFFFAF7F2), // 웜 베이지
+                              borderRadius: BorderRadius.circular(32), // 32px의 넉넉한 둥근 모서리
+                              border: Border.all(
+                                color: const Color(0xFFEFEAE4), // 소프트 보더
+                                width: 1.2,
+                              ),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.015), // 극히 미세한 섀도우
+                                  blurRadius: 10,
+                                  offset: const Offset(0, 4),
+                                ),
+                              ],
+                            ),
+                            child: CustomPaint(
+                              painter: RoomCornerPainter(
+                                mainDark: mainDark,
+                                highlight: highlight,
+                              ),
+                              child: LayoutBuilder(
+                                builder: (context, constraints) {
+                                  final cardWidth = constraints.maxWidth;
+                                  final cardHeight = constraints.maxHeight;
+
+                                  final btnWidth = cardWidth * 0.38; // 폭의 35~40% (38%)
+                                  final btnHeight = cardHeight * 0.14; // 높이의 14% (추가 축소)
+
+                                  return Row(
+                                    children: [
+                                      // 좌측 콘텐츠 영역 (48% 가로폭)
+                                      Expanded(
+                                        flex: 48,
+                                        child: Padding(
+                                          padding: EdgeInsets.fromLTRB(24, cardHeight * 0.08, 0, cardHeight * 0.08),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                            children: [
+                                              // AI POWERED 배지
+                                              Container(
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                decoration: BoxDecoration(
+                                                  color: highlight.withValues(alpha: 0.15),
+                                                  borderRadius: BorderRadius.circular(8),
+                                                ),
+                                                child: Text(
+                                                  "AI POWERED",
+                                                  style: GoogleFonts.outfit(
+                                                    fontSize: cardHeight * 0.036, // 비례 크기
+                                                    fontWeight: FontWeight.w800,
+                                                    color: highlight,
+                                                    letterSpacing: 0.6,
+                                                  ),
+                                                ),
+                                              ),
+                                              // 메인 타이틀
+                                              Text(
+                                                "Create a\n3D Model",
+                                                style: GoogleFonts.outfit(
+                                                  fontSize: cardHeight * 0.10, // 비율 크기를 0.115에서 0.10으로 축소
+                                                  fontWeight: FontWeight.w500, // 볼드체(w800)를 제외한 미디엄 웨이트
+                                                  color: mainDark,
+                                                  height: 1.15,
+                                                ),
+                                              ),
+                                              // 설명 문구
+                                              Text(
+                                                "가구 사진으로 \n3D 모델을 만들어보세요.",
+                                                style: GoogleFonts.jost(
+                                                  fontSize: cardHeight * 0.048, // 12.5pt 비례
+                                                  fontWeight: FontWeight.w400,
+                                                  color: secondaryText,
+                                                  height: 1.35,
+                                                ),
+                                              ),
+                                              // CTA 버튼
+                                              SizedBox(
+                                                width: btnWidth,
+                                                height: btnHeight,
+                                                child: Container(
+                                                  decoration: BoxDecoration(
+                                                    color: mainDark,
+                                                    borderRadius: BorderRadius.circular(btnHeight / 2),
+                                                  ),
+                                                  child: Center(
+                                                    child: Row(
+                                                      mainAxisAlignment: MainAxisAlignment.center,
+                                                      children: [
+                                                        Text(
+                                                          "사진으로 시작하기",
+                                                          style: GoogleFonts.jost(
+                                                            fontSize: btnHeight * 0.32, // 비례 텍스트 크기 상향 조정
+                                                            fontWeight: FontWeight.w600,
+                                                            color: Colors.white,
+                                                          ),
+                                                        ),
+                                                        const Gap(3),
+                                                        Icon(
+                                                          Icons.arrow_forward_rounded,
+                                                          color: Colors.white,
+                                                          size: btnHeight * 0.38, // 비례 아이콘 크기 상향 조정
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                      // 우측 비주얼 일러스트 영역 (52% 가로폭) - 3D 방 모서리 명암에 맞춰 비움
+                                      const Expanded(
+                                        flex: 52,
+                                        child: SizedBox(),
+                                      ),
+                                    ],
+                                  );
+                                },
                               ),
                             ),
-                            const Spacer(),
-                            Icon(Icons.tune, color: highlight, size: 22),
-                          ],
+                          ),
                         ),
                       ),
                     ),
-
-                    // 1. 카테고리 탭 영역 (가로 스크롤 반영)
-                    const Gap(66),
+                    const Gap(28),
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
                       child: Text(
-                        "Categories",
+                        "Quick Actions",
                         style: GoogleFonts.jost(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w400, // 얇고 감각적인 두께로 조정
+                          fontSize: 13,
+                          fontWeight: FontWeight.w500,
                           color: mainDark,
                         ),
                       ),
                     ),
                     const Gap(10),
-                    _CategoryTabs(
-                      categories: activeCategories,
-                      selectedCategory: selectedCategory,
-                      onCategorySelected: (category) {
-                        setState(() {
-                          selectedCategory = category;
-                        });
-                      },
-                      mainDark: mainDark,
-                      highlight: highlight,
-                      secondaryText: secondaryText,
-                    ),
-
-                    const Gap(20),
-
-                    // 그리드 뷰 (실제 3D 가구 모델 렌더링)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: _loading
-                          ? const Center(
+                      child: Row(
+                        children: [
+                          // Left Button: AR 공간 배치
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => Navigator.push(
+                                context,
+                                _slide(const ArViewScreen()),
+                              ).then((_) => _loadAssets()),
+                              child: Container(
+                                height: buttonHeight,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFF6C63FF),
+                                      Color(0xFF3ECFCF),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFF6C63FF).withValues(alpha: 0.15),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Stack(
+                                  children: [
+                                    Positioned(
+                                      right: -8,
+                                      bottom: -8,
+                                      child: Icon(
+                                        Icons.view_in_ar_rounded,
+                                        size: buttonHeight * 0.9,
+                                        color: Colors.white.withValues(alpha: 0.12),
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.all(5),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withValues(alpha: 0.2),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(
+                                              Icons.view_in_ar_outlined,
+                                              color: Colors.white,
+                                              size: buttonHeight * 0.32,
+                                            ),
+                                          ),
+                                          const Gap(8),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                Text(
+                                                  'AR 공간 배치',
+                                                  style: GoogleFonts.jost(
+                                                    color: Colors.white,
+                                                    fontSize: buttonHeight * 0.20,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                                const Gap(2),
+                                                Text(
+                                                  '즉시 공간에 배치',
+                                                  style: GoogleFonts.jost(
+                                                    color: Colors.white.withValues(alpha: 0.85),
+                                                    fontSize: buttonHeight * 0.14,
+                                                    fontWeight: FontWeight.w400,
+                                                  ),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                          const Gap(12),
+                          // Right Button: 내 가구 갤러리
+                          Expanded(
+                            child: GestureDetector(
+                              onTap: () => Navigator.push(
+                                context,
+                                _slide(const GalleryScreen()),
+                              ).then((_) => _loadAssets()),
+                              child: Container(
+                                height: buttonHeight,
+                                decoration: BoxDecoration(
+                                  gradient: const LinearGradient(
+                                    colors: [
+                                      Color(0xFFE4A78B),
+                                      Color(0xFFC08365),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFFC08365).withValues(alpha: 0.15),
+                                      blurRadius: 10,
+                                      offset: const Offset(0, 4),
+                                    ),
+                                  ],
+                                ),
+                                child: Stack(
+                                  children: [
+                                    Positioned(
+                                      right: -8,
+                                      bottom: -8,
+                                      child: Icon(
+                                        Icons.photo_library_rounded,
+                                        size: buttonHeight * 0.9,
+                                        color: Colors.white.withValues(alpha: 0.12),
+                                      ),
+                                    ),
+                                    Padding(
+                                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                      child: Row(
+                                        children: [
+                                          Container(
+                                            padding: const EdgeInsets.all(5),
+                                            decoration: BoxDecoration(
+                                              color: Colors.white.withValues(alpha: 0.2),
+                                              shape: BoxShape.circle,
+                                            ),
+                                            child: Icon(
+                                              Icons.photo_library_outlined,
+                                              color: Colors.white,
+                                              size: buttonHeight * 0.32,
+                                            ),
+                                          ),
+                                          const Gap(8),
+                                          Expanded(
+                                            child: Column(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              mainAxisAlignment: MainAxisAlignment.center,
+                                              children: [
+                                                Text(
+                                                  '내 가구 갤러리',
+                                                  style: GoogleFonts.jost(
+                                                    color: Colors.white,
+                                                    fontSize: buttonHeight * 0.20,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                                const Gap(2),
+                                                Text(
+                                                  '생성 모델 전체 보기',
+                                                  style: GoogleFonts.jost(
+                                                    color: Colors.white.withValues(alpha: 0.85),
+                                                    fontSize: buttonHeight * 0.14,
+                                                    fontWeight: FontWeight.w400,
+                                                  ),
+                                                  overflow: TextOverflow.ellipsis,
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    // 4. Recent Assets 타이틀 영역 (높이 조율 및 카테고리 제거)
+                    const Gap(24),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 24),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text(
+                            "Recent Assets",
+                            style: GoogleFonts.jost(
+                              fontSize: 13, // Quick Actions와 동일하게 13으로 축소
+                              fontWeight: FontWeight.w500, // 미세조정
+                              color: mainDark,
+                            ),
+                          ),
+                          GestureDetector(
+                            onTap: () => Navigator.push(
+                              context,
+                              _slide(const GalleryScreen()),
+                            ).then((_) => _loadAssets()),
+                            child: Container(
+                              color: Colors.transparent, // 투명 탭 영역 확보
+                              padding: const EdgeInsets.symmetric(vertical: 4, horizontal: 8),
+                              child: Text(
+                                "Show all",
+                                style: GoogleFonts.jost(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w400,
+                                  color: highlight,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Gap(14),
+
+                    // 가로 스크롤 뷰 (실제 3D 가구 모델 렌더링)
+                    _loading
+                        ? const Padding(
+                            padding: EdgeInsets.symmetric(horizontal: 24),
+                            child: Center(
                               child: Padding(
                                 padding: EdgeInsets.symmetric(vertical: 60),
                                 child: CircularProgressIndicator(color: AppColors.primary),
                               ),
-                            )
-                          : _error != null
-                              ? Center(
+                            ),
+                          )
+                        : _error != null
+                            ? Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 24),
+                                child: Center(
                                   child: Padding(
                                     padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
                                     child: Column(
@@ -352,9 +654,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ],
                                     ),
                                   ),
-                                )
-                              : currentAssets.isEmpty
-                                  ? Center(
+                                ),
+                              )
+                            : currentAssets.isEmpty
+                                ? Padding(
+                                    padding: const EdgeInsets.symmetric(horizontal: 24),
+                                    child: Center(
                                       child: Padding(
                                         padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 24),
                                         child: Column(
@@ -364,6 +669,9 @@ class _HomeScreenState extends State<HomeScreen> {
                                               decoration: BoxDecoration(
                                                 color: iconBoxBg,
                                                 shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color: Colors.white.withValues(alpha: 0.5),
+                                                ),
                                               ),
                                               child: Icon(Icons.chair_outlined, color: highlight, size: 36),
                                             ),
@@ -388,31 +696,37 @@ class _HomeScreenState extends State<HomeScreen> {
                                           ],
                                         ),
                                       ),
-                                    )
-                                  : GridView.builder(
-                                      shrinkWrap: true,
-                                      physics: const NeverScrollableScrollPhysics(),
-                                      padding: const EdgeInsets.only(bottom: 120),
-                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                                        crossAxisCount: 2,
-                                        mainAxisSpacing: 18,
-                                        crossAxisSpacing: 18,
-                                        childAspectRatio: 0.78,
-                                      ),
+                                    ),
+                                  )
+                                : SizedBox(
+                                    height: cardHeight + 16,
+                                    child: ListView.builder(
+                                      scrollDirection: Axis.horizontal,
+                                      padding: const EdgeInsets.symmetric(horizontal: 24),
                                       itemCount: currentAssets.length,
                                       itemBuilder: (context, index) {
                                         final asset = currentAssets[index];
-                                        return _HomeAssetCard(
-                                          asset: asset,
-                                          mainDark: mainDark,
-                                          highlight: highlight,
-                                          iconBoxBg: iconBoxBg,
-                                          secondaryText: secondaryText,
-                                          onRefresh: _loadAssets,
+                                        return Padding(
+                                          padding: EdgeInsets.only(
+                                            right: index == currentAssets.length - 1 ? 0 : 12,
+                                          ),
+                                          child: SizedBox(
+                                            width: cardWidth,
+                                            height: cardHeight,
+                                            child: _HomeAssetCard(
+                                              asset: asset,
+                                              mainDark: mainDark,
+                                              highlight: highlight,
+                                              iconBoxBg: iconBoxBg,
+                                              secondaryText: secondaryText,
+                                              onRefresh: _loadAssets,
+                                            ),
+                                          ),
                                         );
                                       },
                                     ),
-                    ),
+                                  ),
+                    const Gap(120),
                   ],
                 ),
               ),
@@ -487,149 +801,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
 }
 
-class _CategoryTabs extends StatefulWidget {
-  final List<String> categories;
-  final String selectedCategory;
-  final ValueChanged<String> onCategorySelected;
-  final Color mainDark;
-  final Color highlight;
-  final Color secondaryText;
 
-  const _CategoryTabs({
-    required this.categories,
-    required this.selectedCategory,
-    required this.onCategorySelected,
-    required this.mainDark,
-    required this.highlight,
-    required this.secondaryText,
-  });
-
-  @override
-  State<_CategoryTabs> createState() => _CategoryTabsState();
-}
-
-class _CategoryTabsState extends State<_CategoryTabs> {
-  final GlobalKey _parentKey = GlobalKey();
-  List<GlobalKey> _tabKeys = [];
-  double _indicatorLeft = 0;
-  double _indicatorWidth = 0;
-
-  @override
-  void initState() {
-    super.initState();
-    _tabKeys = List.generate(widget.categories.length, (_) => GlobalKey());
-    WidgetsBinding.instance.addPostFrameCallback((_) => _updateIndicator());
-  }
-
-  @override
-  void didUpdateWidget(covariant _CategoryTabs oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.selectedCategory != widget.selectedCategory ||
-        oldWidget.categories != widget.categories) {
-      if (oldWidget.categories.length != widget.categories.length) {
-        _tabKeys = List.generate(widget.categories.length, (_) => GlobalKey());
-      }
-      WidgetsBinding.instance.addPostFrameCallback((_) => _updateIndicator());
-    }
-  }
-
-  void _updateIndicator() {
-    if (!mounted) return;
-    final index = widget.categories.indexOf(widget.selectedCategory);
-    if (index == -1 || _tabKeys.length <= index) return;
-
-    final RenderBox? parentRenderBox = _parentKey.currentContext?.findRenderObject() as RenderBox?;
-    final RenderBox? tabRenderBox = _tabKeys[index].currentContext?.findRenderObject() as RenderBox?;
-
-    if (parentRenderBox != null && tabRenderBox != null) {
-      final position = tabRenderBox.localToGlobal(Offset.zero, ancestor: parentRenderBox);
-      setState(() {
-        _indicatorLeft = position.dx;
-        _indicatorWidth = tabRenderBox.size.width;
-      });
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final bool isReady = _indicatorWidth > 0;
-
-    return ShaderMask(
-      shaderCallback: (Rect bounds) {
-        return const LinearGradient(
-          begin: Alignment.centerLeft,
-          end: Alignment.centerRight,
-          colors: [
-            Colors.white,
-            Colors.white,
-            Colors.transparent,
-          ],
-          stops: [0.0, 0.82, 1.0],
-        ).createShader(bounds);
-      },
-      blendMode: BlendMode.dstIn,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        physics: const BouncingScrollPhysics(),
-        padding: const EdgeInsets.only(left: 24, right: 48),
-        child: Stack(
-          alignment: Alignment.bottomLeft,
-          clipBehavior: Clip.none,
-          children: [
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: Row(
-                key: _parentKey,
-                children: widget.categories.map((category) {
-                  final isSelected = widget.selectedCategory == category;
-                  final index = widget.categories.indexOf(category);
-                  return GestureDetector(
-                    key: _tabKeys[index],
-                    onTap: () => widget.onCategorySelected(category),
-                    behavior: HitTestBehavior.opaque,
-                    child: Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                      child: Text(
-                        category,
-                        style: GoogleFonts.jost(
-                          fontSize: isSelected ? 16 : 15,
-                          fontWeight: isSelected ? FontWeight.w500 : FontWeight.w300,
-                          color: isSelected
-                              ? widget.mainDark
-                              : widget.secondaryText.withValues(alpha: 0.5),
-                        ),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ),
-            AnimatedPositioned(
-              duration: isReady ? const Duration(milliseconds: 250) : Duration.zero,
-              curve: Curves.easeInOutCubic,
-              left: _indicatorLeft,
-              width: _indicatorWidth,
-              bottom: 4,
-              child: Opacity(
-                opacity: isReady ? 1.0 : 0.0,
-                child: Center(
-                  child: Container(
-                    width: 16,
-                    height: 4,
-                    decoration: BoxDecoration(
-                      color: widget.highlight,
-                      borderRadius: BorderRadius.circular(2),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
 
 class _HomeAssetCard extends StatefulWidget {
   final FurnitureAsset asset;
@@ -698,10 +870,10 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
       child: Container(
         decoration: BoxDecoration(
           color: const Color(0xFFF5F2EB), // soft warm gray/parchment background
-          borderRadius: BorderRadius.circular(24),
+          borderRadius: BorderRadius.circular(12),
           border: Border.all(
             color: const Color(0xFFE5E2DB),
-            width: 1.2,
+            width: 0.8,
           ),
           boxShadow: [
             BoxShadow(
@@ -724,7 +896,7 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
                     color: Colors.white.withValues(alpha: 0.4),
                     child: Center(
                       child: Container(
-                        padding: const EdgeInsets.all(18),
+                        padding: const EdgeInsets.all(8),
                         decoration: BoxDecoration(
                           color: widget.iconBoxBg,
                           shape: BoxShape.circle,
@@ -735,26 +907,26 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
                         child: Icon(
                           Icons.view_in_ar_outlined,
                           color: widget.highlight,
-                          size: 32,
+                          size: 16,
                         ),
                       ),
                     ),
                   ),
                   // AR 버튼 오버레이
                   Positioned(
-                    top: 8,
-                    right: 8,
+                    top: 4,
+                    right: 4,
                     child: GestureDetector(
                       onTap: _openAR,
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
                         decoration: BoxDecoration(
                           gradient: const LinearGradient(
                             colors: [Color(0xFF6C63FF), Color(0xFF3ECFCF)],
                             begin: Alignment.centerLeft,
                             end: Alignment.centerRight,
                           ),
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(6),
                           boxShadow: [
                             BoxShadow(
                               color: Colors.black.withValues(alpha: 0.15),
@@ -765,22 +937,22 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
                         ),
                         child: _openingAR
                             ? const SizedBox(
-                                width: 14,
-                                height: 14,
+                                width: 8,
+                                height: 8,
                                 child: CircularProgressIndicator(
-                                  strokeWidth: 2,
+                                  strokeWidth: 1.5,
                                   color: Colors.white,
                                 ),
                               )
                             : Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 12),
-                                  const Gap(4),
+                                  const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 8),
+                                  const Gap(2),
                                   Text(
                                     'AR',
                                     style: GoogleFonts.outfit(
-                                      fontSize: 11,
+                                      fontSize: 7.5,
                                       fontWeight: FontWeight.w800,
                                       color: Colors.white,
                                     ),
@@ -794,7 +966,7 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.all(14),
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -802,15 +974,15 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
                     widget.asset.displayCategory.toUpperCase(),
                     style: GoogleFonts.jost(
                       color: widget.highlight,
-                      fontSize: 11,
+                      fontSize: 7,
                       fontWeight: FontWeight.w800,
                     ),
                   ),
-                  const Gap(4),
+                  const Gap(2),
                   Text(
                     widget.asset.displayName,
                     style: GoogleFonts.jost(
-                      fontSize: 15,
+                      fontSize: 9,
                       fontWeight: FontWeight.w700,
                       color: widget.mainDark,
                     ),
@@ -823,5 +995,113 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
         ),
       ),
     );
+  }
+}
+
+class RoomCornerPainter extends CustomPainter {
+  final Color mainDark;
+  final Color highlight;
+
+  RoomCornerPainter({
+    required this.mainDark,
+    required this.highlight,
+  });
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    // 1. 원점 (0,0,0) - 카드 너비의 63% 지점 (X = size.width * 0.63), 높이의 35% 지점 (Y = size.height * 0.65)
+    final double x0 = size.width * 0.63;
+    final double y0 = size.height * 0.65;
+    final Offset origin = Offset(x0, y0);
+
+    // 대각선이 좌우 경계면에 닿는 Y 좌표
+    final double yLeftEnd = size.height * 0.85;
+    final double yRightEnd = size.height * 0.85;
+
+    final Offset leftEnd = Offset(0, yLeftEnd);
+    final Offset rightEnd = Offset(size.width, yRightEnd);
+
+    // 2. 각 영역의 Path 정의
+    // 좌측 벽면 (Left Wall)
+    final Path leftWallPath = Path()
+      ..moveTo(x0, y0)
+      ..lineTo(x0, 0)
+      ..lineTo(0, 0)
+      ..lineTo(0, yLeftEnd)
+      ..close();
+
+    // 우측 벽면 (Right Wall)
+    final Path rightWallPath = Path()
+      ..moveTo(x0, y0)
+      ..lineTo(x0, 0)
+      ..lineTo(size.width, 0)
+      ..lineTo(size.width, yRightEnd)
+      ..close();
+
+    // 바닥면 (Floor)
+    final Path floorPath = Path()
+      ..moveTo(x0, y0)
+      ..lineTo(0, yLeftEnd)
+      ..lineTo(0, size.height)
+      ..lineTo(size.width, size.height)
+      ..lineTo(size.width, yRightEnd)
+      ..close();
+
+    // 3. 좌측 벽면 채색 (밝은 조명 워시 효과: white.withValues(alpha: 0.6) ~ 0.1)
+    // 원점(Alignment(0.26, 0.3))으로 향하는 선형 그라디언트
+    final Rect fullRect = Rect.fromLTWH(0, 0, size.width, size.height);
+    final Paint leftWallPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: const Alignment(0.26, 0.3),
+        colors: [
+          Colors.white.withValues(alpha: 0.6),
+          Colors.white.withValues(alpha: 0.1),
+        ],
+      ).createShader(fullRect);
+    canvas.drawPath(leftWallPath, leftWallPaint);
+
+    // 4. 우측 벽면 채색 (소프트 웜 그림자 효과: highlight.withValues(alpha: 0.24) ~ 0.0)
+    // 원점(Alignment(0.26, 0.3))으로 향하는 선형 그라디언트
+    final Paint rightWallPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topRight,
+        end: const Alignment(0.26, 0.3),
+        colors: [
+          highlight.withValues(alpha: 0.24),
+          highlight.withValues(alpha: 0.0),
+        ],
+      ).createShader(fullRect);
+    canvas.drawPath(rightWallPath, rightWallPaint);
+
+    // 5. 바닥면 채색 (앰비언트 오클루전 그림자 효과: mainDark.withValues(alpha: 0.09) ~ 0.0 방사형 그라디언트)
+    final double floorRadius = size.width * 0.6;
+    final Rect floorRect = Rect.fromCircle(center: origin, radius: floorRadius);
+    final Paint floorPaint = Paint()
+      ..shader = RadialGradient(
+        colors: [
+          mainDark.withValues(alpha: 0.09),
+          mainDark.withValues(alpha: 0.0),
+        ],
+      ).createShader(floorRect);
+    canvas.drawPath(floorPath, floorPaint);
+
+    // 6. 세 축의 차분한 경계선 그리기 (mainDark.withValues(alpha: 0.04))
+    final Paint linePaint = Paint()
+      ..color = mainDark.withValues(alpha: 0.04)
+      ..strokeWidth = 1.0
+      ..style = PaintingStyle.stroke;
+
+    // 수직 모서리선
+    canvas.drawLine(origin, Offset(x0, 0), linePaint);
+    // 좌측 대각선
+    canvas.drawLine(origin, leftEnd, linePaint);
+    // 우측 대각선
+    canvas.drawLine(origin, rightEnd, linePaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant RoomCornerPainter oldDelegate) {
+    return oldDelegate.mainDark != mainDark || oldDelegate.highlight != highlight;
   }
 }
