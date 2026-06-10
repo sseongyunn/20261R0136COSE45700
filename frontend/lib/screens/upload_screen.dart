@@ -977,7 +977,7 @@ class _AnalysisCard extends StatelessWidget {
   }
 }
 
-class _RequestForm extends StatelessWidget {
+class _RequestForm extends StatefulWidget {
   final TextEditingController nameController;
   final TextEditingController categoryController;
   final TextEditingController widthController;
@@ -991,6 +991,38 @@ class _RequestForm extends StatelessWidget {
     required this.heightController,
     required this.depthController,
   });
+
+  @override
+  State<_RequestForm> createState() => _RequestFormState();
+}
+
+class _RequestFormState extends State<_RequestForm> {
+  String _selectedPreset = 'chair';
+
+  final List<(String, String)> _presets = const [
+    ('Chair', 'chair'),
+    ('Sofa', 'sofa'),
+    ('Bed', 'bed'),
+    ('Table', 'table'),
+    ('Lamp', 'lamp'),
+    ('Cabinet', 'cabinet'),
+    ('Custom', 'custom'),
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final initialValue = widget.categoryController.text.trim().toLowerCase();
+    final match = _presets.any((p) => p.$2 == initialValue);
+    if (match && initialValue != 'custom') {
+      _selectedPreset = initialValue;
+    } else if (initialValue.isEmpty) {
+      _selectedPreset = 'chair';
+      widget.categoryController.text = 'chair';
+    } else {
+      _selectedPreset = 'custom';
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -1013,15 +1045,71 @@ class _RequestForm extends StatelessWidget {
             ),
           ),
           const Gap(14),
-          _TextInput(controller: nameController, label: '이름'),
-          const Gap(10),
-          _TextInput(controller: categoryController, label: '카테고리'),
-          const Gap(10),
+          _TextInput(controller: widget.nameController, label: '이름'),
+          const Gap(14),
+          Text(
+            'Category',
+            style: GoogleFonts.outfit(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: Colors.white.withValues(alpha: 0.8),
+            ),
+          ),
+          const Gap(8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _presets.map((preset) {
+              final isSelected = _selectedPreset == preset.$2;
+              return ChoiceChip(
+                label: Text(
+                  preset.$1,
+                  style: GoogleFonts.outfit(
+                    color: isSelected ? Colors.white : Colors.white70,
+                    fontSize: 13,
+                    fontWeight: isSelected ? FontWeight.w700 : FontWeight.w400,
+                  ),
+                ),
+                selected: isSelected,
+                onSelected: (selected) {
+                  if (selected) {
+                    setState(() {
+                      _selectedPreset = preset.$2;
+                      if (preset.$2 != 'custom') {
+                        widget.categoryController.text = preset.$2;
+                      } else {
+                        widget.categoryController.clear();
+                      }
+                    });
+                  }
+                },
+                backgroundColor: Colors.white.withValues(alpha: 0.08),
+                selectedColor: AppColors.primary.withValues(alpha: 0.35),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  side: BorderSide(
+                    color: isSelected
+                        ? AppColors.primary
+                        : Colors.white.withValues(alpha: 0.15),
+                  ),
+                ),
+                showCheckmark: false,
+              );
+            }).toList(),
+          ),
+          if (_selectedPreset == 'custom') ...[
+            const Gap(12),
+            _TextInput(
+              controller: widget.categoryController,
+              label: '카테고리 직접 입력 (영문)',
+            ),
+          ],
+          const Gap(14),
           Row(
             children: [
               Expanded(
                 child: _TextInput(
-                  controller: widthController,
+                  controller: widget.widthController,
                   label: '가로 cm',
                   number: true,
                 ),
@@ -1029,7 +1117,7 @@ class _RequestForm extends StatelessWidget {
               const Gap(8),
               Expanded(
                 child: _TextInput(
-                  controller: depthController,
+                  controller: widget.depthController,
                   label: '깊이 cm',
                   number: true,
                 ),
@@ -1037,7 +1125,7 @@ class _RequestForm extends StatelessWidget {
               const Gap(8),
               Expanded(
                 child: _TextInput(
-                  controller: heightController,
+                  controller: widget.heightController,
                   label: '높이 cm',
                   number: true,
                 ),

@@ -5,9 +5,10 @@ import 'package:provider/provider.dart';
 
 import '../api_client.dart';
 import '../providers/pending_jobs_provider.dart';
+import '../theme/app_theme.dart';
 import 'ar_view_screen.dart';
-import 'gallery_screen.dart';
 import 'upload_screen.dart';
+import 'model_url_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -26,30 +27,76 @@ class _HomeScreenState extends State<HomeScreen> {
   final Color iconBoxBg = const Color(0xFFEFEAE4).withValues(alpha: 0.4);     // 소프트 애시 베이지
   final Color secondaryText = const Color(0xFF8E847A); // 뮤트 타우프 그레이
 
-  // 카테고리별 목업 데이터 세팅
-  final Map<String, List<Map<String, String>>> mockupData = {
-    "Chairs": [
-      {"title": "Sansa Chair", "img": "https://images.unsplash.com/photo-1567538096630-e0c55bd6374c?w=500"},
-      {"title": "Eames Lounge", "img": "https://images.unsplash.com/photo-1592078615290-033ee584e267?w=500"},
-    ],
-    "Sofas": [
-      {"title": "Nordic Velvet Sofa", "img": "https://images.unsplash.com/photo-1555041469-a586c61ea9bc?w=500"},
-      {"title": "Minimalist Divan", "img": "https://images.unsplash.com/photo-1484101403633-562f891dc89a?w=500"},
-    ],
-    "Beds": [
-      {"title": "Platform Bed Frame", "img": "https://images.unsplash.com/photo-1505693416388-ac5ce068fe85?w=500"},
-    ],
-    "Tables": [
-      {"title": "Oak Dining Table", "img": "https://images.unsplash.com/photo-1530018607912-eff2df114f11?w=500"},
-      {"title": "Minimalist Desk", "img": "https://images.unsplash.com/photo-1518455027359-f3f8164ba6bd?w=500"},
-    ],
-    "Lamps": [
-      {"title": "Brass Floor Lamp", "img": "https://images.unsplash.com/photo-1507473885765-e6ed057f782c?w=500"},
-    ],
-    "Cabinets": [
-      {"title": "Wooden Sideboard", "img": "https://images.unsplash.com/photo-1595428774223-ef52624120d2?w=500"},
-    ],
-  };
+  final List<String> baseCategories = const ["Chairs", "Sofas", "Beds", "Tables", "Lamps", "Cabinets"];
+  List<String> activeCategories = ["Chairs", "Sofas", "Beds", "Tables", "Lamps", "Cabinets"];
+  List<FurnitureAsset> _assets = [];
+  bool _loading = true;
+  String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAssets();
+  }
+
+  Future<void> _loadAssets() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+    try {
+      final api = context.read<ApiClient>();
+      final assets = await api.listFurnitureAssets();
+      if (!mounted) return;
+
+      final Set<String> customCats = {};
+      for (final asset in assets) {
+        final norm = _normalizeCategory(asset.category);
+        if (!baseCategories.contains(norm)) {
+          customCats.add(norm);
+        }
+      }
+
+      setState(() {
+        _assets = assets;
+        activeCategories = [...baseCategories, ...customCats.toList()..sort()];
+        if (!activeCategories.contains(selectedCategory)) {
+          selectedCategory = activeCategories.isNotEmpty ? activeCategories[0] : "Chairs";
+        }
+        _loading = false;
+      });
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _error = e.toString();
+          _loading = false;
+        });
+      }
+    }
+  }
+
+  String _normalizeCategory(String? raw) {
+    if (raw == null || raw.trim().isEmpty) return 'Others';
+    final clean = raw.trim().toLowerCase();
+    if (clean == 'chair' || clean == 'chairs') return 'Chairs';
+    if (clean == 'sofa' || clean == 'sofas' || clean == 'couch') return 'Sofas';
+    if (clean == 'bed' || clean == 'beds') return 'Beds';
+    if (clean == 'table' || clean == 'tables' || clean == 'desk') return 'Tables';
+    if (clean == 'lamp' || clean == 'lamps' || clean == 'light') return 'Lamps';
+    if (clean == 'cabinet' || clean == 'cabinets' || clean == 'sideboard') return 'Cabinets';
+
+    final capitalized = raw.trim()[0].toUpperCase() + raw.trim().substring(1);
+    if (capitalized.toLowerCase().endsWith('s')) {
+      return capitalized;
+    }
+    return '${capitalized}s';
+  }
+
+  bool _matchesCategory(FurnitureAsset asset, String category) {
+    final normAsset = _normalizeCategory(asset.category);
+    return normAsset == category;
+  }
 
   void _showLogoutDialog(BuildContext context) {
     showDialog(
@@ -107,7 +154,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget build(BuildContext context) {
     final api = context.watch<ApiClient>();
 
-    List<Map<String, String>> currentModels = mockupData[selectedCategory] ?? [];
+    final currentAssets = _assets.where((asset) => _matchesCategory(asset, selectedCategory)).toList();
 
     // 사용자 이름 파싱 (이메일 앞자리)
     final username = api.email != null && api.email!.contains('@')
@@ -256,7 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     ),
                     const Gap(10),
                     _CategoryTabs(
-                      categories: mockupData.keys.toList(),
+                      categories: activeCategories,
                       selectedCategory: selectedCategory,
                       onCategorySelected: (category) {
                         setState(() {
@@ -270,25 +317,101 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     const Gap(20),
 
-                    // 그리드 뷰 (비대칭 느낌의 유연한 Grid 구현)
+                    // 그리드 뷰 (실제 3D 가구 모델 렌더링)
                     Padding(
                       padding: const EdgeInsets.symmetric(horizontal: 24),
-                      child: GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        padding: const EdgeInsets.only(bottom: 120), // 하단 플로팅 도크가 겹치지 않도록 스페이싱 확보
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 2,
-                          mainAxisSpacing: 18,
-                          crossAxisSpacing: 18,
-                          childAspectRatio: 0.78,
-                        ),
-                        itemCount: currentModels.length,
-                        itemBuilder: (context, index) {
-                          var item = currentModels[index];
-                          return _buildModelCard(item['title']!, item['img']!, context);
-                        },
-                      ),
+                      child: _loading
+                          ? const Center(
+                              child: Padding(
+                                padding: EdgeInsets.symmetric(vertical: 60),
+                                child: CircularProgressIndicator(color: AppColors.primary),
+                              ),
+                            )
+                          : _error != null
+                              ? Center(
+                                  child: Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 40, horizontal: 24),
+                                    child: Column(
+                                      children: [
+                                        Text(
+                                          '오류가 발생했어요:\n$_error',
+                                          textAlign: TextAlign.center,
+                                          style: GoogleFonts.jost(color: secondaryText),
+                                        ),
+                                        const Gap(12),
+                                        ElevatedButton(
+                                          onPressed: _loadAssets,
+                                          style: ElevatedButton.styleFrom(
+                                            backgroundColor: highlight,
+                                            foregroundColor: Colors.white,
+                                            elevation: 0,
+                                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                          ),
+                                          child: Text('다시 시도', style: GoogleFonts.jost(fontWeight: FontWeight.bold)),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                )
+                              : currentAssets.isEmpty
+                                  ? Center(
+                                      child: Padding(
+                                        padding: const EdgeInsets.symmetric(vertical: 60, horizontal: 24),
+                                        child: Column(
+                                          children: [
+                                            Container(
+                                              padding: const EdgeInsets.all(16),
+                                              decoration: BoxDecoration(
+                                                color: iconBoxBg,
+                                                shape: BoxShape.circle,
+                                              ),
+                                              child: Icon(Icons.chair_outlined, color: highlight, size: 36),
+                                            ),
+                                            const Gap(16),
+                                            Text(
+                                              '아직 생성된 모델이 없어요',
+                                              style: GoogleFonts.jost(
+                                                fontSize: 16,
+                                                fontWeight: FontWeight.bold,
+                                                color: mainDark,
+                                              ),
+                                            ),
+                                            const Gap(6),
+                                            Text(
+                                              '새 가구 이미지를 업로드해서 3D 모델을 만들어보세요!',
+                                              textAlign: TextAlign.center,
+                                              style: GoogleFonts.jost(
+                                                fontSize: 13,
+                                                color: secondaryText,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    )
+                                  : GridView.builder(
+                                      shrinkWrap: true,
+                                      physics: const NeverScrollableScrollPhysics(),
+                                      padding: const EdgeInsets.only(bottom: 120),
+                                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                                        crossAxisCount: 2,
+                                        mainAxisSpacing: 18,
+                                        crossAxisSpacing: 18,
+                                        childAspectRatio: 0.78,
+                                      ),
+                                      itemCount: currentAssets.length,
+                                      itemBuilder: (context, index) {
+                                        final asset = currentAssets[index];
+                                        return _HomeAssetCard(
+                                          asset: asset,
+                                          mainDark: mainDark,
+                                          highlight: highlight,
+                                          iconBoxBg: iconBoxBg,
+                                          secondaryText: secondaryText,
+                                          onRefresh: _loadAssets,
+                                        );
+                                      },
+                                    ),
                     ),
                   ],
                 ),
@@ -300,102 +423,6 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
         ),
       );
-  }
-
-  // 3D 모델 프로젝트 카드 빌더
-  Widget _buildModelCard(String title, String imageUrl, BuildContext context) {
-    return GestureDetector(
-      onTap: () {
-        // 상세 프로젝트 조회로 넘어가는 링크로 갤러리 스크린 연결
-        Navigator.push(
-          context,
-          _slide(const GalleryScreen()),
-        );
-      },
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: RadialGradient(
-            center: Alignment.center,
-            radius: 1.1,
-            colors: [
-              const Color(0xFFD3AD97).withValues(alpha: 0.35),
-              const Color(0xFFB1AFAF).withValues(alpha: 0.35),
-              const Color(0xFFDBC9A9).withValues(alpha: 0.35),
-            ],
-            stops: const [0.0, 0.5, 1.0],
-          ),
-          borderRadius: BorderRadius.circular(24),
-          border: Border.all(
-            color: Colors.white.withValues(alpha: 0.3),
-            width: 1.2,
-          ),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withValues(alpha: 0.03),
-              blurRadius: 12,
-              offset: const Offset(0, 6),
-            )
-          ],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Expanded(
-              child: Container(
-                margin: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: iconBoxBg,
-                  borderRadius: BorderRadius.circular(18),
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(18),
-                  child: Image.network(
-                    imageUrl,
-                    fit: BoxFit.cover,
-                    width: double.infinity,
-                    height: double.infinity,
-                    // ⚠️ 외부 Unsplash 이미지 로드 실패 시 미려한 기본 아이콘 박스로 예외 처리
-                    errorBuilder: (context, error, stackTrace) => Center(
-                      child: Icon(
-                        Icons.chair_outlined,
-                        color: highlight,
-                        size: 36,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-            Padding(
-              padding: const EdgeInsets.only(left: 14, right: 14, bottom: 14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    selectedCategory,
-                    style: GoogleFonts.jost(
-                      color: highlight,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                    ),
-                  ),
-                  const Gap(4),
-                  Text(
-                    title,
-                    style: GoogleFonts.jost(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                      color: mainDark,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            )
-          ],
-        ),
-      ),
-    );
   }
 
   // 박물관 앱 스타일의 하단 3버튼 플로팅 도크
@@ -423,7 +450,7 @@ class _HomeScreenState extends State<HomeScreen> {
             // 왼쪽 버튼: 홈 화면 (현재 활성화 상태로 라이트 브라운 하이라이트)
             IconButton(
               icon: const Icon(Icons.home_filled, color: Colors.white),
-              onPressed: () {},
+              onPressed: _loadAssets,
             ),
             // 가운데 버튼: 사진으로 새로운 모델 만들기 (UploadScreen 연동)
             IconButton(
@@ -431,7 +458,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () => Navigator.push(
                 context,
                 _slide(const UploadScreen()),
-              ),
+              ).then((_) => _loadAssets()),
             ),
             // 오른쪽 버튼: 즉시 AR 공간 배치 진입 (ArViewScreen 연동)
             IconButton(
@@ -439,7 +466,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () => Navigator.push(
                 context,
                 _slide(const ArViewScreen()),
-              ),
+              ).then((_) => _loadAssets()),
             ),
           ],
         ),
@@ -595,6 +622,201 @@ class _CategoryTabsState extends State<_CategoryTabs> {
                     ),
                   ),
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeAssetCard extends StatefulWidget {
+  final FurnitureAsset asset;
+  final Color mainDark;
+  final Color highlight;
+  final Color iconBoxBg;
+  final Color secondaryText;
+  final VoidCallback onRefresh;
+
+  const _HomeAssetCard({
+    required this.asset,
+    required this.mainDark,
+    required this.highlight,
+    required this.iconBoxBg,
+    required this.secondaryText,
+    required this.onRefresh,
+  });
+
+  @override
+  State<_HomeAssetCard> createState() => _HomeAssetCardState();
+}
+
+class _HomeAssetCardState extends State<_HomeAssetCard> {
+  bool _openingAR = false;
+
+  Future<void> _openAR() async {
+    if (_openingAR) return;
+    setState(() => _openingAR = true);
+    try {
+      final url = await context.read<ApiClient>().getModelUrl(widget.asset.assetId);
+      if (!mounted) return;
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ArViewScreen(
+            modelUrl: url,
+            modelName: widget.asset.displayName,
+            dimensions: widget.asset.dimensions,
+          ),
+        ),
+      ).then((_) => widget.onRefresh());
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('URL을 가져오지 못했어요.', style: GoogleFonts.outfit()),
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _openingAR = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => ModelUrlScreen(
+            assetId: widget.asset.assetId,
+            modelName: widget.asset.displayName,
+          ),
+        ),
+      ).then((_) => widget.onRefresh()),
+      child: Container(
+        decoration: BoxDecoration(
+          color: const Color(0xFFF5F2EB), // soft warm gray/parchment background
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(
+            color: const Color(0xFFE5E2DB),
+            width: 1.2,
+          ),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.02),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            )
+          ],
+        ),
+        clipBehavior: Clip.hardEdge,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  Container(
+                    width: double.infinity,
+                    color: Colors.white.withValues(alpha: 0.4),
+                    child: Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: widget.iconBoxBg,
+                          shape: BoxShape.circle,
+                          border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.5),
+                          ),
+                        ),
+                        child: Icon(
+                          Icons.view_in_ar_outlined,
+                          color: widget.highlight,
+                          size: 32,
+                        ),
+                      ),
+                    ),
+                  ),
+                  // AR 버튼 오버레이
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: GestureDetector(
+                      onTap: _openAR,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(
+                            colors: [Color(0xFF6C63FF), Color(0xFF3ECFCF)],
+                            begin: Alignment.centerLeft,
+                            end: Alignment.centerRight,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.15),
+                              blurRadius: 4,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: _openingAR
+                            ? const SizedBox(
+                                width: 14,
+                                height: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  const Icon(Icons.camera_alt_rounded, color: Colors.white, size: 12),
+                                  const Gap(4),
+                                  Text(
+                                    'AR',
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w800,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.all(14),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    widget.asset.displayCategory.toUpperCase(),
+                    style: GoogleFonts.jost(
+                      color: widget.highlight,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const Gap(4),
+                  Text(
+                    widget.asset.displayName,
+                    style: GoogleFonts.jost(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: widget.mainDark,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
               ),
             ),
           ],
