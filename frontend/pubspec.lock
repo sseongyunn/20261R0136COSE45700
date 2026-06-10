@@ -20,10 +20,9 @@ packages:
   arkit_plugin:
     dependency: "direct main"
     description:
-      name: arkit_plugin
-      sha256: "60cfa9517c0a040dd7ae44f118ec47588e3c84d5528a30f9fb1213c39c4b4bf9"
-      url: "https://pub.dev"
-    source: hosted
+      path: "packages/arkit_plugin"
+      relative: true
+    source: path
     version: "1.3.0"
   async:
     dependency: transitive

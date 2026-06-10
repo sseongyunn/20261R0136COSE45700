@@ -37,9 +37,35 @@ class ArViewScreen extends StatefulWidget {
 class _ArViewScreenState extends State<ArViewScreen> {
   static const _previewNodeName = 'placement_preview';
   static const _objectPickRadius = 110.0;
-  static const _ambientLightNodeName = 'estimated_ambient_light';
-  static const _keyLightNodeName = 'estimated_key_light';
+  static const _globalLightPrefix = 'room_light_';
   static const _shadowSuffix = '__contact_shadow';
+
+  // Room-light tracking. ARKit's ambientIntensity is ~1000 lm in a well-lit
+  // room. The wide clamp (especially the low floor) plus a >1 response
+  // exponent make dark rooms render clearly dark instead of hovering near
+  // "normal", and bright rooms brighten past neutral.
+  static const _lightEstimateMin = 40.0;
+  static const _lightEstimateMax = 2200.0;
+  static const _lightResponseExponent = 1.35;
+  static const _lightSmoothing = 0.3;
+  // GLB materials load as SceneKit physically-based, which IGNORES ambient
+  // lights — the rigs must be built from directional lights only.
+  static const _keyLightShare = 0.85;
+  static const _fillLightShare = 0.42;
+  static const _bounceLightShare = 0.18;
+
+  // Per-position light sampling. Each placed object's spot is sampled from
+  // the raw camera image (center + ring around the footprint); the local
+  // luminance is divided by the frame average so the factor is independent of
+  // camera auto-exposure and of where the phone happens to point.
+  static const _defaultLightCategory = 1; // SceneKit default node category.
+  static const _localSampleRingCount = 8;
+  static const _localRatioMin = 0.25;
+  static const _localRatioMax = 1.9;
+  // <1 softens the dark/bright spread to limit damage when a dark *surface*
+  // (rather than a dark spot) is mistaken for shade.
+  static const _localResponseExponent = 0.8;
+  static const _localFactorSmoothing = 0.35;
   static const _yawSnapStep = math.pi / 12; // 15° detents
   static const _yawSnapWindow = math.pi / 45; // ±4° sticky zone
   // Soft "upright" assist window. Lean is otherwise completely free (any
@@ -59,6 +85,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
   double _ambientIntensity = 1000;
   double _ambientTemperature = 6500;
   bool _lightEstimateActive = false;
+  // Last values pushed over the platform channel, used to skip no-op updates.
+  double? _appliedLightIntensity;
+  double? _appliedLightTemperature;
+  // Light-category bits currently assigned to placed models.
+  final Set<int> _usedLightBits = {};
 
   int? _yawDetentForHaptic;
   bool _tiltSnappedForHaptic = false;
@@ -172,7 +203,6 @@ class _ArViewScreenState extends State<ArViewScreen> {
       if (!mounted) return;
       setState(() => _activeAsset = arAsset);
       await _prepareAsset(arAsset);
-      unawaited(_syncLightingWithRoom());
     } catch (e) {
       if (!mounted) return;
       setState(() => _downloadError = '모델 URL을 가져오지 못했어요: $e');
@@ -342,16 +372,19 @@ class _ArViewScreenState extends State<ArViewScreen> {
     await targetFile.writeAsBytes(output.takeBytes(), flush: true);
   }
 
+  /// Bakes a one-time color normalization into the GLB and clamps material
+  /// properties so the model responds correctly to the estimate-driven light
+  /// rig:
+  /// - baseColor is normalized toward the input photo's color baseline;
+  /// - emissive is capped near zero (emissive glows regardless of room light,
+  ///   which would break the dark-room response);
+  /// - metallic is capped and roughness floored because without image-based
+  ///   lighting highly metallic surfaces render nearly black.
   Future<void> _writeRenderableGlb({
     required File sourceFile,
     required File targetFile,
     required AssetRenderProfile? profile,
   }) async {
-    if (profile == null) {
-      await sourceFile.copy(targetFile.path);
-      return;
-    }
-
     final bytes = await sourceFile.readAsBytes();
     if (bytes.length < 20) {
       await sourceFile.copy(targetFile.path);
@@ -377,9 +410,10 @@ class _ArViewScreenState extends State<ArViewScreen> {
       _assignDefaultMaterialToPrimitives(gltf);
     }
 
-    final tint = _profileTint(profile);
-    final exposure = _profileTextureExposure(profile);
-    final emissiveLift = _profileEmissiveLift(profile);
+    final tint = profile == null
+        ? const [1.0, 1.0, 1.0]
+        : _profileTint(profile);
+    final exposure = profile == null ? 1.0 : _profileTextureExposure(profile);
 
     for (var i = 0; i < materials.length; i += 1) {
       final material = Map<String, dynamic>.from(
@@ -397,26 +431,28 @@ class _ArViewScreenState extends State<ArViewScreen> {
       ];
       pbr['baseColorFactor'] = adjustedBase;
 
-      if (!pbr.containsKey('metallicFactor') &&
-          (profile.metallicMean ?? 0.0) < 0.15) {
-        pbr['metallicFactor'] = 0.0;
-      }
-      if (!pbr.containsKey('roughnessFactor')) {
-        final roughness = (profile.roughnessMean ?? 0.82)
-            .clamp(0.55, 0.95)
-            .toDouble();
-        pbr['roughnessFactor'] = roughness;
-      }
+      // glTF defaults metallicFactor to 1.0 when missing; without IBL that
+      // renders nearly black under directional lights, so cap it low.
+      final metallic =
+          (pbr['metallicFactor'] as num?)?.toDouble() ??
+          (profile?.metallicMean ?? 0.0);
+      pbr['metallicFactor'] = metallic.clamp(0.0, 0.25).toDouble();
+      final roughness =
+          (pbr['roughnessFactor'] as num?)?.toDouble() ??
+          (profile?.roughnessMean ?? 0.82);
+      pbr['roughnessFactor'] = roughness.clamp(0.4, 1.0).toDouble();
 
       material['pbrMetallicRoughness'] = pbr;
       material['doubleSided'] = material['doubleSided'] ?? true;
 
-      if (emissiveLift > 0) {
-        final existing = _rgbFactor(material['emissiveFactor']);
+      // Emissive is light-independent and would keep the object glowing in a
+      // dark room; allow at most a trace of it.
+      final emissive = _rgbFactor(material['emissiveFactor']);
+      if (emissive.any((channel) => channel > 0.04)) {
         material['emissiveFactor'] = <double>[
-          (existing[0] + emissiveLift * tint[0]).clamp(0.0, 0.35).toDouble(),
-          (existing[1] + emissiveLift * tint[1]).clamp(0.0, 0.35).toDouble(),
-          (existing[2] + emissiveLift * tint[2]).clamp(0.0, 0.35).toDouble(),
+          emissive[0].clamp(0.0, 0.04).toDouble(),
+          emissive[1].clamp(0.0, 0.04).toDouble(),
+          emissive[2].clamp(0.0, 0.04).toDouble(),
         ];
       }
 
@@ -486,6 +522,10 @@ class _ArViewScreenState extends State<ArViewScreen> {
     return const [0.0, 0.0, 0.0];
   }
 
+  /// One-time tint that nudges the generated texture back toward the input
+  /// photo's color baseline. Room warmth is intentionally NOT baked in here —
+  /// it comes from the live light rig's color temperature so it can change
+  /// with the room.
   List<double> _profileTint(AssetRenderProfile profile) {
     final input = profile.inputColorProfile;
     final targetR = input?.targetMeanR;
@@ -500,18 +540,17 @@ class _ArViewScreenState extends State<ArViewScreen> {
         modelR != null &&
         modelG != null &&
         modelB != null) {
-      final roomTint = _roomTemperatureTint();
-      double channel(double target, double model, double room) {
+      double channel(double target, double model) {
         final ratio = (target.clamp(0.02, 1.0) / model.clamp(0.02, 1.0))
             .clamp(0.45, 2.3)
             .toDouble();
-        return (math.pow(ratio, 0.55) * room).clamp(0.72, 1.38).toDouble();
+        return math.pow(ratio, 0.55).clamp(0.72, 1.38).toDouble();
       }
 
       return [
-        channel(targetR, modelR, roomTint[0]),
-        channel(targetG, modelG, roomTint[1]),
-        channel(targetB, modelB, roomTint[2]),
+        channel(targetR, modelR),
+        channel(targetG, modelG),
+        channel(targetB, modelB),
       ];
     }
 
@@ -519,21 +558,16 @@ class _ArViewScreenState extends State<ArViewScreen> {
     final g = targetG ?? profile.albedoMeanG;
     final b = targetB ?? profile.albedoMeanB;
     if (r == null || g == null || b == null) {
-      return _roomTemperatureTint();
+      return const [1.0, 1.0, 1.0];
     }
 
     final mean = ((r + g + b) / 3).clamp(0.001, 1.0).toDouble();
-    final roomTint = _roomTemperatureTint();
-    double channel(double value, double room) {
+    double channel(double value) {
       final albedoBias = 1 + ((value / mean) - 1) * 0.08;
-      return (albedoBias * room).clamp(0.9, 1.1).toDouble();
+      return albedoBias.clamp(0.9, 1.1).toDouble();
     }
 
-    return [
-      channel(r, roomTint[0]),
-      channel(g, roomTint[1]),
-      channel(b, roomTint[2]),
-    ];
+    return [channel(r), channel(g), channel(b)];
   }
 
   double _profileTextureExposure(AssetRenderProfile profile) {
@@ -553,28 +587,6 @@ class _ArViewScreenState extends State<ArViewScreen> {
       math.max(textureGain, preprocessGain),
     );
     return baselineGain.clamp(0.76, 1.95).toDouble();
-  }
-
-  double _profileEmissiveLift(AssetRenderProfile profile) {
-    final input = profile.inputColorProfile;
-    final targetLuma =
-        input?.processedLuminanceMean ??
-        input?.targetLuminance ??
-        input?.originalLuminanceMean ??
-        0.50;
-    final modelLuma = profile.textureLuminanceMean ?? targetLuma;
-    final missing = (targetLuma - modelLuma).clamp(0.0, 1.0).toDouble();
-    final lift = math.max(profile.suggestedEmissiveLift, missing * 0.32);
-    return lift.clamp(0.0, 0.28).toDouble();
-  }
-
-  List<double> _roomTemperatureTint() {
-    final warmth = ((6500 - _ambientTemperature) / 3500).clamp(-1.0, 1.0);
-    return [
-      (1 + warmth * 0.045).clamp(0.92, 1.08).toDouble(),
-      1.0,
-      (1 - warmth * 0.045).clamp(0.92, 1.08).toDouble(),
-    ];
   }
 
   int _paddedLength(int length) => (length + 3) & ~3;
@@ -791,51 +803,84 @@ class _ArViewScreenState extends State<ArViewScreen> {
     );
     _setupLightRig();
     _lightTimer = Timer.periodic(
-      const Duration(milliseconds: 900),
+      const Duration(milliseconds: 250),
       (_) => _syncLightingWithRoom(),
     );
   }
 
-  /// Adds an ambient fill + a directional key light that we keep in sync with
-  /// ARKit's real-time light estimate so placed furniture matches the room's
-  /// brightness and warmth.
+  /// The placed GLBs use SceneKit's physically-based lighting model, which
+  /// ignores ambient lights entirely — so every rig is three *directional*
+  /// lights: a key light from above-front, a softer fill from the opposite
+  /// side, and a faint floor bounce from below.
+  ///
+  /// Lighting is two-layered:
+  /// - a *global* rig (category 1) lights the placement preview and any
+  ///   non-categorized content, following ARKit's room-wide estimate;
+  /// - each placed object gets its *own* rig scoped via categoryBitMask, with
+  ///   intensity = global estimate x that object's local light factor sampled
+  ///   from the camera image at its position. An object under a table is lit
+  ///   darker than one standing in a bright patch.
+  List<({String id, double share, vector.Vector3 euler})> get _rigSpecs => [
+    (
+      id: 'key',
+      share: _keyLightShare,
+      euler: vector.Vector3(-1.05, -0.45, 0),
+    ),
+    (
+      id: 'fill',
+      share: _fillLightShare,
+      euler: vector.Vector3(-0.85, 2.35, 0),
+    ),
+    (
+      id: 'bounce',
+      share: _bounceLightShare,
+      euler: vector.Vector3(1.15, 0.55, 0),
+    ),
+  ];
+
+  ARKitNode _rigLightNode({
+    required String name,
+    required ({String id, double share, vector.Vector3 euler}) spec,
+    required double intensity,
+    required int category,
+  }) => ARKitNode(
+    name: name,
+    light: ARKitLight(
+      type: ARKitLightType.directional,
+      temperature: _ambientTemperature,
+      intensity: intensity * spec.share,
+      categoryBitMask: category,
+    ),
+    eulerAngles: spec.euler,
+  );
+
   Future<void> _setupLightRig() async {
     final controller = _arkitController;
     if (controller == null || _lightRigReady) return;
     try {
-      await controller.add(_ambientLightNode());
-      await controller.add(_keyLightNode());
+      for (final spec in _rigSpecs) {
+        await controller.add(
+          _rigLightNode(
+            name: '$_globalLightPrefix${spec.id}',
+            spec: spec,
+            intensity: _effectiveLightIntensity(),
+            category: _defaultLightCategory,
+          ),
+        );
+      }
       _lightRigReady = true;
     } catch (e) {
       debugPrint('[AR] light rig setup failed: $e');
     }
   }
 
-  ARKitNode _ambientLightNode() => ARKitNode(
-    name: _ambientLightNodeName,
-    light: ARKitLight(
-      type: ARKitLightType.ambient,
-      temperature: _ambientTemperature,
-      intensity: _ambientIntensity * 0.62 * _profileLightingGain(),
-    ),
-  );
-
-  ARKitNode _keyLightNode() => ARKitNode(
-    name: _keyLightNodeName,
-    light: ARKitLight(
-      type: ARKitLightType.directional,
-      temperature: _ambientTemperature,
-      intensity: _ambientIntensity * 0.48 * _profileLightingGain(),
-    ),
-    // Aim the directional light down and slightly forward, like a ceiling lamp.
-    eulerAngles: vector.Vector3(-1.05, -0.45, 0),
-  );
-
-  double _profileLightingGain() {
-    final profile = _activeRenderProfile;
-    if (profile == null) return 1.0;
-    final gain = _profileTextureExposure(profile);
-    return (1 + (gain - 1) * 0.48).clamp(0.84, 1.38).toDouble();
+  /// Maps the smoothed estimate to the rig intensity. The exponent stretches
+  /// the perceived range: lights-off drives the object visibly dark while a
+  /// bright room pushes it past neutral.
+  double _effectiveLightIntensity() {
+    final normalized = (_ambientIntensity / 1000.0).clamp(0.0, 3.0);
+    return 1000.0 *
+        math.pow(normalized, _lightResponseExponent).toDouble();
   }
 
   Future<void> _syncLightingWithRoom() async {
@@ -844,26 +889,240 @@ class _ArViewScreenState extends State<ArViewScreen> {
     final estimate = await controller.getLightEstimate();
     if (estimate == null || !mounted) return;
 
-    final targetIntensity = estimate.ambientIntensity.clamp(150.0, 2000.0);
+    final targetIntensity = estimate.ambientIntensity.clamp(
+      _lightEstimateMin,
+      _lightEstimateMax,
+    );
     final targetTemperature = estimate.ambientColorTemperature.clamp(
-      3200.0,
-      9000.0,
+      3000.0,
+      8000.0,
     );
 
     // Ease toward the estimate so lighting transitions smoothly instead of
     // flickering frame to frame.
-    _ambientIntensity += (targetIntensity - _ambientIntensity) * 0.25;
-    _ambientTemperature += (targetTemperature - _ambientTemperature) * 0.25;
+    _ambientIntensity += (targetIntensity - _ambientIntensity) * _lightSmoothing;
+    _ambientTemperature +=
+        (targetTemperature - _ambientTemperature) * _lightSmoothing;
 
     if (!_lightRigReady) return;
-    try {
-      await controller.update(_ambientLightNodeName, node: _ambientLightNode());
-      await controller.update(_keyLightNodeName, node: _keyLightNode());
-    } catch (e) {
-      debugPrint('[AR] light rig update failed: $e');
+
+    final effective = _effectiveLightIntensity();
+    final intensityDelta = _appliedLightIntensity == null
+        ? double.infinity
+        : (effective - _appliedLightIntensity!).abs();
+    final temperatureDelta = _appliedLightTemperature == null
+        ? double.infinity
+        : (_ambientTemperature - _appliedLightTemperature!).abs();
+    // Skip global-rig updates when the change is imperceptible.
+    final globalChanged =
+        intensityDelta >= math.max(6.0, effective * 0.015) ||
+        temperatureDelta >= 30;
+
+    if (globalChanged) {
+      try {
+        for (final spec in _rigSpecs) {
+          await controller.update(
+            '$_globalLightPrefix${spec.id}',
+            node: _rigLightNode(
+              name: '$_globalLightPrefix${spec.id}',
+              spec: spec,
+              intensity: effective,
+              category: _defaultLightCategory,
+            ),
+          );
+        }
+        _appliedLightIntensity = effective;
+        _appliedLightTemperature = _ambientTemperature;
+      } catch (e) {
+        debugPrint('[AR] light rig update failed: $e');
+      }
     }
+
+    await _updateLocalLightFactors(controller);
+    await _syncModelRigs(force: globalChanged);
+    await _syncShadowsWithLight();
+
     if (!_lightEstimateActive && mounted) {
       setState(() => _lightEstimateActive = true);
+    }
+  }
+
+  /// Estimates each placed object's local light by sampling the *raw camera
+  /// image* (virtual content excluded, so our own renders can't feed back) at
+  /// the object's center plus a ring around its footprint. Dividing the local
+  /// luminance by the frame average cancels camera auto-exposure and keeps
+  /// the factor stable while the phone moves. Off-screen objects keep their
+  /// last factor.
+  Future<void> _updateLocalLightFactors(ARKitController controller) async {
+    if (_placedModels.isEmpty) return;
+    final models = _placedModels.values.toList();
+    final points = <double>[];
+    for (final model in models) {
+      final half = _footprintHalfExtents(model);
+      final radius = (math.max(half.x, half.z) * 1.7 + 0.06)
+          .clamp(0.15, 0.9)
+          .toDouble();
+      final ground = model.groundPosition;
+      points
+        ..add(ground.x)
+        ..add(ground.y + 0.01)
+        ..add(ground.z);
+      for (var i = 0; i < _localSampleRingCount; i += 1) {
+        final angle = i * 2 * math.pi / _localSampleRingCount;
+        points
+          ..add(ground.x + radius * math.cos(angle))
+          ..add(ground.y + 0.01)
+          ..add(ground.z + radius * math.sin(angle));
+      }
+    }
+
+    Map<String, dynamic>? response;
+    try {
+      response = await controller.sampleCameraLuminance(points);
+    } catch (e) {
+      debugPrint('[AR] camera luminance sampling failed: $e');
+      return;
+    }
+    if (response == null) return;
+    final samples = (response['samples'] as List?)?.cast<num>();
+    final frameAverage = (response['frameAverage'] as num?)?.toDouble() ?? -1;
+    if (samples == null || frameAverage <= 0.02) return;
+
+    const perModel = 1 + _localSampleRingCount;
+    for (var m = 0; m < models.length; m += 1) {
+      final start = m * perModel;
+      if (start + perModel > samples.length) break;
+      final valid = <double>[
+        for (var i = start; i < start + perModel; i += 1)
+          if (samples[i] >= 0) samples[i].toDouble(),
+      ];
+      // Mostly off-screen: hold the previous factor so pointing the phone
+      // away from an object doesn't change how it is lit.
+      if (valid.length < 3) continue;
+      valid.sort();
+      // Trimmed mean rejects stray highlights/occluders in the ring.
+      final drop = valid.length >= 5 ? (valid.length * 0.2).floor() : 0;
+      final usable = valid.sublist(drop, valid.length - drop);
+      final localLuma = usable.reduce((a, b) => a + b) / usable.length;
+      final ratio = (localLuma / frameAverage)
+          .clamp(_localRatioMin, _localRatioMax)
+          .toDouble();
+      final target = math.pow(ratio, _localResponseExponent).toDouble();
+
+      final model = models[m];
+      if (!model.localFactorSeeded) {
+        model.localLightFactor = target;
+        model.localFactorSeeded = true;
+      } else {
+        model.localLightFactor +=
+            (target - model.localLightFactor) * _localFactorSmoothing;
+      }
+    }
+  }
+
+  int _allocateLightBit() {
+    for (var bit = 2; bit <= 30; bit += 1) {
+      if (!_usedLightBits.contains(bit)) {
+        _usedLightBits.add(bit);
+        return bit;
+      }
+    }
+    // More than 29 concurrent objects: share a bit (lighting still works,
+    // those objects just share one local factor's rig).
+    return 2;
+  }
+
+  String _modelLightName(_PlacedModel model, String specId) =>
+      '${model.nodeName}__light_$specId';
+
+  Future<void> _addModelRig(_PlacedModel model) async {
+    final controller = _arkitController;
+    if (controller == null) return;
+    final intensity = _effectiveLightIntensity() * model.localLightFactor;
+    try {
+      for (final spec in _rigSpecs) {
+        await controller.add(
+          _rigLightNode(
+            name: _modelLightName(model, spec.id),
+            spec: spec,
+            intensity: intensity,
+            category: model.lightCategory,
+          ),
+        );
+      }
+      model.appliedRigIntensity = intensity;
+      model.appliedRigTemperature = _ambientTemperature;
+    } catch (e) {
+      debugPrint('[AR] model light rig add failed: $e');
+    }
+  }
+
+  Future<void> _syncModelRigs({required bool force}) async {
+    for (final model in _placedModels.values) {
+      await _syncModelRig(model, force: force);
+    }
+  }
+
+  Future<void> _syncModelRig(_PlacedModel model, {bool force = false}) async {
+    final controller = _arkitController;
+    if (controller == null) return;
+    final intensity = _effectiveLightIntensity() * model.localLightFactor;
+    final applied = model.appliedRigIntensity;
+    if (!force &&
+        applied != null &&
+        (intensity - applied).abs() < math.max(6.0, intensity * 0.015)) {
+      return;
+    }
+    try {
+      for (final spec in _rigSpecs) {
+        await controller.update(
+          _modelLightName(model, spec.id),
+          node: _rigLightNode(
+            name: _modelLightName(model, spec.id),
+            spec: spec,
+            intensity: intensity,
+            category: model.lightCategory,
+          ),
+        );
+      }
+      model.appliedRigIntensity = intensity;
+      model.appliedRigTemperature = _ambientTemperature;
+    } catch (e) {
+      debugPrint('[AR] model light rig update failed: $e');
+    }
+  }
+
+  Future<void> _removeModelRig(_PlacedModel model) async {
+    final controller = _arkitController;
+    _usedLightBits.remove(model.lightBit);
+    if (controller == null) return;
+    for (final spec in _rigSpecs) {
+      try {
+        await controller.remove(_modelLightName(model, spec.id));
+      } catch (e) {
+        debugPrint('[AR] model light rig remove failed: $e');
+      }
+    }
+  }
+
+  /// Contact shadows track the light at the object's own spot: strong light
+  /// means a crisp dark disc, shade or a dark room fades it out.
+  double _shadowAlphaFor(_PlacedModel model) {
+    final normalized =
+        (_effectiveLightIntensity() * model.localLightFactor / 1000.0)
+            .clamp(0.0, 1.0);
+    return (0.10 + 0.26 * normalized).clamp(0.10, 0.36).toDouble();
+  }
+
+  Future<void> _syncShadowsWithLight() async {
+    for (final model in _placedModels.values) {
+      final alpha = _shadowAlphaFor(model);
+      if (model.appliedShadowAlpha != null &&
+          (alpha - model.appliedShadowAlpha!).abs() < 0.02) {
+        continue;
+      }
+      model.appliedShadowAlpha = alpha;
+      await _syncShadow(model);
     }
   }
 
@@ -907,7 +1166,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       diffuse: ARKitMaterialProperty.color(Colors.black),
       lightingModelName: ARKitLightingModel.constant,
       blendMode: ARKitBlendMode.alpha,
-      transparency: 0.32,
+      transparency: _shadowAlphaFor(model),
       writesToDepthBuffer: false,
       doubleSided: true,
     );
@@ -1206,10 +1465,12 @@ class _ArViewScreenState extends State<ArViewScreen> {
       bounds: prepared.bounds,
       previewSize: prepared.previewSize,
       groundPosition: position,
+      lightBit: _allocateLightBit(),
     );
     _setModelGroundPosition(model, position);
 
     await _addPlacedModel(model);
+    await _addModelRig(model);
     if (!mounted) return;
     _yawDetentForHaptic = 0;
     _tiltSnappedForHaptic = true;
@@ -1288,6 +1549,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
           ],
         ),
         position: model.position + vector.Vector3(0, 0.09, 0),
+        categoryBitMask: model.lightCategory,
       );
       await controller.add(fallback);
     }
@@ -1308,6 +1570,8 @@ class _ArViewScreenState extends State<ArViewScreen> {
       assetType: AssetType.documents,
       url: model.localGlbPath,
       name: model.nodeName,
+      // Scopes the model to its private light rig (see _addModelRig).
+      categoryBitMask: model.lightCategory,
     );
     node.transform = _transformForModel(model);
     return node;
@@ -1513,7 +1777,10 @@ class _ArViewScreenState extends State<ArViewScreen> {
     if (nodeName == null || _arkitController == null) return;
     final removed = _placedModels[nodeName];
     await _arkitController!.remove(nodeName);
-    if (removed != null) await _removeShadow(removed);
+    if (removed != null) {
+      await _removeShadow(removed);
+      await _removeModelRig(removed);
+    }
     if (!mounted) return;
     setState(() {
       _placedModels.remove(nodeName);
@@ -1572,6 +1839,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       for (final model in _placedModels.values) {
         await controller.remove(model.nodeName);
         await _removeShadow(model);
+        await _removeModelRig(model);
       }
     }
     if (!mounted) return;
@@ -1595,11 +1863,21 @@ class _ArViewScreenState extends State<ArViewScreen> {
         : _ambientTemperature < 6200
         ? '중간'
         : '시원함';
+    final parts = <String>[brightness, warmth];
+
+    // Local light at the selected object's spot (sampled from the camera).
+    final selected = _selectedModel;
+    if (selected != null && selected.localFactorSeeded) {
+      if (selected.localLightFactor < 0.78) {
+        parts.add('그늘');
+      } else if (selected.localLightFactor > 1.22) {
+        parts.add('밝은 자리');
+      }
+    }
+
     final profile = _activeRenderProfile;
-    final correction = profile != null && profile.needsColorLift ? '색보정' : null;
-    return correction == null
-        ? '$brightness · $warmth'
-        : '$brightness · $warmth · $correction';
+    if (profile != null && profile.needsColorLift) parts.add('색보정');
+    return parts.join(' · ');
   }
 
   Color _roomLightColor() {
@@ -1645,12 +1923,13 @@ class _ArViewScreenState extends State<ArViewScreen> {
           ARKitSceneView(
             configuration: ARKitConfiguration.worldTracking,
             planeDetection: ARPlaneDetection.horizontal,
-            // Generate HDR environment probes from the camera feed so models are
-            // lit and reflect the real room (image-based lighting).
+            // No environment probes: image-based lighting is captured from the
+            // camera while the room is bright and does NOT dim when the light
+            // changes, which kept objects glowing in dark rooms. The
+            // estimate-driven directional rig is the single light source, so
+            // object brightness tracks the real room deterministically.
             environmentTexturing:
-                ARWorldTrackingConfigurationEnvironmentTexturing.automatic,
-            // We drive our own light rig from ARKit's light estimate, so the
-            // flat default fill light is disabled to avoid washing out the IBL.
+                ARWorldTrackingConfigurationEnvironmentTexturing.none,
             autoenablesDefaultLighting: false,
             enableTapRecognizer: false,
             enablePanRecognizer: false,
@@ -1825,6 +2104,12 @@ class _PlacedModel {
   final vector.Vector3 baseRotation;
   final _ModelBounds? bounds;
   final _PreviewSize previewSize;
+
+  /// Bit index identifying this object's private light category. The model
+  /// node and its dedicated light rig share `1 << lightBit`, so the rig
+  /// illuminates only this object.
+  final int lightBit;
+
   vector.Vector3 groundPosition;
   vector.Vector3 position;
 
@@ -1837,6 +2122,19 @@ class _PlacedModel {
   /// Unbounded so the object can be tipped over or stood up from any pose.
   vector.Matrix4 leanRotation;
 
+  /// Light multiplier for the spot this object stands on, estimated from the
+  /// camera image (1 = as bright as the frame average). Drives this object's
+  /// private rig so a model under a table reads darker than one in sunlight.
+  double localLightFactor;
+  bool localFactorSeeded;
+
+  /// Last values pushed to the platform channel, for no-op skipping.
+  double? appliedRigIntensity;
+  double? appliedRigTemperature;
+  double? appliedShadowAlpha;
+
+  int get lightCategory => 1 << lightBit;
+
   _PlacedModel({
     required this.nodeName,
     required this.asset,
@@ -1846,10 +2144,13 @@ class _PlacedModel {
     required this.bounds,
     required this.previewSize,
     required this.groundPosition,
+    required this.lightBit,
   }) : position = groundPosition,
        rawYaw = 0,
        userYaw = 0,
-       leanRotation = vector.Matrix4.identity();
+       leanRotation = vector.Matrix4.identity(),
+       localLightFactor = 1.0,
+       localFactorSeeded = false;
 }
 
 class _ModelCalibration {
