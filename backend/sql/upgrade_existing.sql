@@ -1,64 +1,40 @@
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
-CREATE TABLE IF NOT EXISTS users (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  email TEXT UNIQUE NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now()
-);
+ALTER TABLE generation_jobs
+  ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'varco',
+  ADD COLUMN IF NOT EXISTS provider_request_id TEXT,
+  ADD COLUMN IF NOT EXISTS requested_name TEXT,
+  ADD COLUMN IF NOT EXISTS requested_category TEXT,
+  ADD COLUMN IF NOT EXISTS requested_width_cm NUMERIC(8,2),
+  ADD COLUMN IF NOT EXISTS requested_height_cm NUMERIC(8,2),
+  ADD COLUMN IF NOT EXISTS requested_depth_cm NUMERIC(8,2),
+  ADD COLUMN IF NOT EXISTS failure_reason TEXT,
+  ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'single',
+  ADD COLUMN IF NOT EXISTS source_back_image_id UUID,
+  ADD COLUMN IF NOT EXISTS source_left_image_id UUID,
+  ADD COLUMN IF NOT EXISTS source_right_image_id UUID;
 
-CREATE TABLE IF NOT EXISTS user_identities (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  provider TEXT NOT NULL,
-  provider_user_id TEXT NOT NULL,
-  password_hash TEXT,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(provider, provider_user_id),
-  CHECK (provider IN ('local', 'google', 'apple'))
-);
+UPDATE generation_jobs
+SET provider = 'varco'
+WHERE provider IS NULL;
 
-CREATE TABLE IF NOT EXISTS source_images (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  s3_bucket TEXT NOT NULL,
-  s3_key TEXT NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT now(),
-  UNIQUE(s3_bucket, s3_key)
-);
+UPDATE generation_jobs
+SET generation_mode = 'single'
+WHERE generation_mode IS NULL;
 
-CREATE TABLE IF NOT EXISTS generation_jobs (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  source_image_id UUID NOT NULL REFERENCES source_images(id) ON DELETE CASCADE,
-  source_back_image_id UUID REFERENCES source_images(id) ON DELETE CASCADE,
-  source_left_image_id UUID REFERENCES source_images(id) ON DELETE CASCADE,
-  source_right_image_id UUID REFERENCES source_images(id) ON DELETE CASCADE,
+ALTER TABLE generation_jobs
+  ALTER COLUMN provider SET DEFAULT 'varco',
+  ALTER COLUMN provider SET NOT NULL,
+  ALTER COLUMN generation_mode SET DEFAULT 'single',
+  ALTER COLUMN generation_mode SET NOT NULL;
 
-  generation_mode TEXT NOT NULL DEFAULT 'single'
-    CHECK (generation_mode IN ('single', 'multiview')),
-
-  status TEXT NOT NULL DEFAULT 'queued'
-    CHECK (status IN ('queued', 'submitted', 'processing', 'succeeded', 'failed')),
-
-  provider TEXT NOT NULL DEFAULT 'varco',
-  provider_request_id TEXT,
-
-  requested_name TEXT,
-  requested_category TEXT,
-  requested_width_cm NUMERIC(8,2),
-  requested_height_cm NUMERIC(8,2),
-  requested_depth_cm NUMERIC(8,2),
-
-  queued_at TIMESTAMPTZ DEFAULT now(),
-  started_at TIMESTAMPTZ,
-  completed_at TIMESTAMPTZ,
-  failed_at TIMESTAMPTZ,
-  failure_reason TEXT,
-
-  CHECK (requested_width_cm IS NULL OR requested_width_cm > 0),
-  CHECK (requested_height_cm IS NULL OR requested_height_cm > 0),
-  CHECK (requested_depth_cm IS NULL OR requested_depth_cm > 0)
-);
+ALTER TABLE furniture_assets
+  ADD COLUMN IF NOT EXISTS name TEXT,
+  ADD COLUMN IF NOT EXISTS category TEXT,
+  ADD COLUMN IF NOT EXISTS width_cm NUMERIC(8,2),
+  ADD COLUMN IF NOT EXISTS height_cm NUMERIC(8,2),
+  ADD COLUMN IF NOT EXISTS depth_cm NUMERIC(8,2),
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 CREATE TABLE IF NOT EXISTS generation_job_source_images (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -133,31 +109,6 @@ CREATE TABLE IF NOT EXISTS source_image_preprocess_profiles (
   CHECK (processed_saturation_mean IS NULL OR (processed_saturation_mean >= 0 AND processed_saturation_mean <= 1))
 );
 
-CREATE TABLE IF NOT EXISTS furniture_assets (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  generation_job_id UUID UNIQUE NOT NULL REFERENCES generation_jobs(id) ON DELETE CASCADE,
-
-  name TEXT,
-  category TEXT,
-
-  width_cm NUMERIC(8,2),
-  height_cm NUMERIC(8,2),
-  depth_cm NUMERIC(8,2),
-
-  model_s3_bucket TEXT NOT NULL,
-  model_s3_key TEXT NOT NULL,
-
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now(),
-
-  UNIQUE(model_s3_bucket, model_s3_key),
-
-  CHECK (width_cm IS NULL OR width_cm > 0),
-  CHECK (height_cm IS NULL OR height_cm > 0),
-  CHECK (depth_cm IS NULL OR depth_cm > 0)
-);
-
 CREATE TABLE IF NOT EXISTS asset_render_profiles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   asset_id UUID UNIQUE NOT NULL REFERENCES furniture_assets(id) ON DELETE CASCADE,
@@ -222,13 +173,6 @@ CREATE TABLE IF NOT EXISTS asset_render_profiles (
   CHECK (metallic_mean IS NULL OR (metallic_mean >= 0 AND metallic_mean <= 1)),
   CHECK (suggested_exposure_gain > 0),
   CHECK (suggested_emissive_lift >= 0),
-  CHECK (preprocess_exposure_gain IS NULL OR preprocess_exposure_gain > 0),
-  CHECK (preprocess_gamma IS NULL OR preprocess_gamma > 0),
-  CHECK (preprocess_saturation_gain IS NULL OR preprocess_saturation_gain > 0),
-  CHECK (preprocess_contrast_gain IS NULL OR preprocess_contrast_gain > 0),
-  CHECK (preprocess_red_gain IS NULL OR preprocess_red_gain > 0),
-  CHECK (preprocess_green_gain IS NULL OR preprocess_green_gain > 0),
-  CHECK (preprocess_blue_gain IS NULL OR preprocess_blue_gain > 0),
   CHECK (material_count >= 0),
   CHECK (texture_count >= 0)
 );
@@ -253,43 +197,6 @@ ALTER TABLE asset_render_profiles
   ADD COLUMN IF NOT EXISTS preprocess_red_gain NUMERIC(6,3),
   ADD COLUMN IF NOT EXISTS preprocess_green_gain NUMERIC(6,3),
   ADD COLUMN IF NOT EXISTS preprocess_blue_gain NUMERIC(6,3);
-
--- Idempotent upgrades for databases created from older versions of this file.
-ALTER TABLE generation_jobs
-  ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'varco',
-  ADD COLUMN IF NOT EXISTS provider_request_id TEXT,
-  ADD COLUMN IF NOT EXISTS requested_name TEXT,
-  ADD COLUMN IF NOT EXISTS requested_category TEXT,
-  ADD COLUMN IF NOT EXISTS requested_width_cm NUMERIC(8,2),
-  ADD COLUMN IF NOT EXISTS requested_height_cm NUMERIC(8,2),
-  ADD COLUMN IF NOT EXISTS requested_depth_cm NUMERIC(8,2),
-  ADD COLUMN IF NOT EXISTS failure_reason TEXT,
-  ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'single',
-  ADD COLUMN IF NOT EXISTS source_back_image_id UUID,
-  ADD COLUMN IF NOT EXISTS source_left_image_id UUID,
-  ADD COLUMN IF NOT EXISTS source_right_image_id UUID;
-
-UPDATE generation_jobs
-SET provider = 'varco'
-WHERE provider IS NULL;
-
-UPDATE generation_jobs
-SET generation_mode = 'single'
-WHERE generation_mode IS NULL;
-
-ALTER TABLE generation_jobs
-  ALTER COLUMN provider SET DEFAULT 'varco',
-  ALTER COLUMN provider SET NOT NULL,
-  ALTER COLUMN generation_mode SET DEFAULT 'single',
-  ALTER COLUMN generation_mode SET NOT NULL;
-
-ALTER TABLE furniture_assets
-  ADD COLUMN IF NOT EXISTS name TEXT,
-  ADD COLUMN IF NOT EXISTS category TEXT,
-  ADD COLUMN IF NOT EXISTS width_cm NUMERIC(8,2),
-  ADD COLUMN IF NOT EXISTS height_cm NUMERIC(8,2),
-  ADD COLUMN IF NOT EXISTS depth_cm NUMERIC(8,2),
-  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT now();
 
 DO $$
 BEGIN
@@ -404,7 +311,7 @@ BEGIN
   END IF;
 END $$;
 
-CREATE INDEX IF NOT EXISTS idx_source_images_user_id 
+CREATE INDEX IF NOT EXISTS idx_source_images_user_id
 ON source_images(user_id);
 
 CREATE INDEX IF NOT EXISTS idx_source_image_preprocess_profiles_source
@@ -413,13 +320,13 @@ ON source_image_preprocess_profiles(source_image_id);
 CREATE INDEX IF NOT EXISTS idx_source_image_preprocess_profiles_job
 ON source_image_preprocess_profiles(generation_job_id);
 
-CREATE INDEX IF NOT EXISTS idx_generation_jobs_user_status 
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_user_status
 ON generation_jobs(user_id, status);
 
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_user_queued_at
 ON generation_jobs(user_id, queued_at DESC);
 
-CREATE INDEX IF NOT EXISTS idx_generation_jobs_status_queued 
+CREATE INDEX IF NOT EXISTS idx_generation_jobs_status_queued
 ON generation_jobs(status, queued_at);
 
 CREATE INDEX IF NOT EXISTS idx_generation_jobs_provider_status
@@ -431,7 +338,7 @@ ON generation_job_source_images(generation_job_id, sort_order);
 CREATE INDEX IF NOT EXISTS idx_generation_job_source_images_source_image
 ON generation_job_source_images(source_image_id);
 
-CREATE INDEX IF NOT EXISTS idx_furniture_assets_user_created 
+CREATE INDEX IF NOT EXISTS idx_furniture_assets_user_created
 ON furniture_assets(user_id, created_at DESC);
 
 CREATE INDEX IF NOT EXISTS idx_asset_render_profiles_user_id

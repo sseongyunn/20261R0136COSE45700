@@ -4,7 +4,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
-from botocore.exceptions import ClientError
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -12,12 +11,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.database import get_db
 from app.deps import get_current_user
-from app.services.s3_service import head_object_metadata
 
 
 router = APIRouter(prefix="/source-images", tags=["source-images"])
-
-ALLOWED_CONTENT_TYPES = {"image/jpeg", "image/png", "image/webp"}
 
 
 class SourceImageCompleteRequest(BaseModel):
@@ -42,29 +38,6 @@ def complete_source_image_upload(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid S3 bucket")
     if not payload.s3Key.startswith(expected_prefix):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid S3 key")
-
-    try:
-        metadata = head_object_metadata(payload.s3Bucket, payload.s3Key)
-    except FileNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded source image was not found in S3",
-        ) from exc
-    except ClientError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail="Could not verify uploaded source image",
-        ) from exc
-
-    if int(metadata.get("ContentLength") or 0) <= 0:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded image is empty")
-
-    content_type = str(metadata.get("ContentType") or "").split(";", 1)[0].lower()
-    if content_type not in ALLOWED_CONTENT_TYPES:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded object is not a supported image type",
-        )
 
     existing = db.execute(
         text(

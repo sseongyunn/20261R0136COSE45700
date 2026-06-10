@@ -22,8 +22,6 @@ class Settings:
     aws_region: str
     s3_bucket: str
     jwt_secret: str
-    cors_allow_origins: list[str]
-    cors_allow_credentials: bool
     varco_api_key: Optional[str]
     varco_api_key_header: str
     varco_submit_url: str
@@ -43,6 +41,12 @@ class Settings:
     hunyuan_guidance_scale: float
     hunyuan_num_chunks: int
     hunyuan_face_count: int
+    preprocess_images: bool
+    preprocess_target_luminance: float
+    preprocess_min_exposure_gain: float
+    preprocess_max_exposure_gain: float
+    preprocess_saturation_gain: float
+    preprocess_contrast_gain: float
     mock_varco: bool
     access_token_expire_hours: int = 24
     upload_url_expire_seconds: int = 900
@@ -75,12 +79,6 @@ def _float_env(name: str, default: float) -> float:
     return float(value)
 
 
-def _list_env(name: str, default: str) -> list[str]:
-    value = os.getenv(name, default)
-    items = [item.strip() for item in value.split(",") if item.strip()]
-    return items or [default]
-
-
 def get_settings() -> Settings:
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
@@ -99,8 +97,6 @@ def get_settings() -> Settings:
         aws_region=os.getenv("AWS_REGION", "us-east-1"),
         s3_bucket=s3_bucket,
         jwt_secret=jwt_secret,
-        cors_allow_origins=_list_env("CORS_ALLOW_ORIGINS", "*"),
-        cors_allow_credentials=_bool_env("CORS_ALLOW_CREDENTIALS", default=False),
         varco_api_key=os.getenv("VARCO_API_KEY") or os.getenv("OPENAPI_KEY"),
         varco_api_key_header=os.getenv("VARCO_API_KEY_HEADER", "OPENAPI_KEY"),
         varco_submit_url=os.getenv(
@@ -126,6 +122,12 @@ def get_settings() -> Settings:
         hunyuan_guidance_scale=_float_env("HUNYUAN_GUIDANCE_SCALE", 5.0),
         hunyuan_num_chunks=_int_env("HUNYUAN_NUM_CHUNKS", 8000),
         hunyuan_face_count=_int_env("HUNYUAN_FACE_COUNT", 1000000),
+        preprocess_images=_bool_env("PREPROCESS_IMAGES", default=True),
+        preprocess_target_luminance=_float_env("PREPROCESS_TARGET_LUMINANCE", 0.58),
+        preprocess_min_exposure_gain=_float_env("PREPROCESS_MIN_EXPOSURE_GAIN", 0.82),
+        preprocess_max_exposure_gain=_float_env("PREPROCESS_MAX_EXPOSURE_GAIN", 1.75),
+        preprocess_saturation_gain=_float_env("PREPROCESS_SATURATION_GAIN", 1.10),
+        preprocess_contrast_gain=_float_env("PREPROCESS_CONTRAST_GAIN", 1.04),
         mock_varco=_bool_env("MOCK_VARCO", default=False),
         access_token_expire_hours=_int_env("ACCESS_TOKEN_EXPIRE_HOURS", 24),
         upload_url_expire_seconds=_int_env("UPLOAD_URL_EXPIRE_SECONDS", 900),

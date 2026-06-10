@@ -196,12 +196,6 @@ def _build_multiview_sources(payload: CreateGenerationJobRequest) -> list[dict]:
             "left": payload.leftSourceImageId,
             "right": payload.rightSourceImageId,
         }
-        missing = [view for view, source_image_id in legacy_sources.items() if not source_image_id]
-        if missing:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Missing multiview source images: {', '.join(missing)}",
-            )
         sources = [
             {
                 "source_image_id": source_image_id,

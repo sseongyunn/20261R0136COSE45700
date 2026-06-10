@@ -159,6 +159,10 @@ def encode_image_jpeg_base64(image: Image.Image, max_size: int) -> str:
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
+def encode_image_data_url(image: Image.Image, max_size: int) -> str:
+    return f"data:image/jpeg;base64,{encode_image_jpeg_base64(image, max_size)}"
+
+
 CANONICAL_VIEWS = ("front", "back", "left", "right")
 VIEW_ALIASES = {
     "front_left": ("front", "left"),
@@ -174,6 +178,10 @@ VIEW_ALIASES = {
 }
 TEXTURE_VIEW_ORDER = ("front", "right", "back", "left")
 VIEW_SELECTOR_BASE_URL = os.getenv("VIEW_SELECTOR_BASE_URL", "").rstrip("/")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
+OPENAI_VIEW_SELECTOR_MODEL = os.getenv("OPENAI_VIEW_SELECTOR_MODEL", "gpt-4.1-mini")
+OPENAI_VIEW_SELECTOR_TIMEOUT_SECONDS = int(os.getenv("OPENAI_VIEW_SELECTOR_TIMEOUT_SECONDS", "90"))
+OPENAI_VIEW_SELECTOR_MAX_IMAGE_SIZE = int(os.getenv("OPENAI_VIEW_SELECTOR_MAX_IMAGE_SIZE", "768"))
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
 CLAUDE_VIEW_SELECTOR_MODEL = os.getenv("CLAUDE_VIEW_SELECTOR_MODEL", "claude-3-5-haiku-20241022")
 CLAUDE_VIEW_SELECTOR_TIMEOUT_SECONDS = int(os.getenv("CLAUDE_VIEW_SELECTOR_TIMEOUT_SECONDS", "90"))
@@ -256,6 +264,84 @@ def _parse_json_object(text: str) -> dict:
         if start >= 0 and end > start:
             return json.loads(cleaned[start : end + 1])
         raise
+
+
+def _apply_openai_view_selector(candidates: list[dict]) -> bool:
+    if not OPENAI_API_KEY:
+        return False
+
+    content = [
+        {
+            "type": "input_text",
+            "text": (
+                "Classify each furniture image by camera viewpoint. "
+                "Allowed views: front, back, left, right, front_left, front_right, "
+                "back_left, back_right, detail, unknown. "
+                "Use the user-provided hint only as weak context; inspect the image itself. "
+                "Return strict JSON only with this shape: "
+                "{\"images\":[{\"id\":\"...\",\"view\":\"front|back|left|right|front_left|front_right|back_left|back_right|detail|unknown\","
+                "\"confidence\":0.0,\"quality\":0.0,\"reason\":\"short\"}]}. "
+                "confidence means viewpoint certainty. quality means usefulness for 3D reconstruction."
+            ),
+        }
+    ]
+
+    for candidate in candidates:
+        content.append(
+            {
+                "type": "input_text",
+                "text": f"image id={candidate['id']}, user_hint={candidate.get('view_label', 'unknown')}",
+            }
+        )
+        content.append(
+            {
+                "type": "input_image",
+                "image_url": encode_image_data_url(candidate["image"], OPENAI_VIEW_SELECTOR_MAX_IMAGE_SIZE),
+            }
+        )
+
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={
+            "Authorization": f"Bearer {OPENAI_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": OPENAI_VIEW_SELECTOR_MODEL,
+            "input": [{"role": "user", "content": content}],
+        },
+        timeout=OPENAI_VIEW_SELECTOR_TIMEOUT_SECONDS,
+    )
+    response.raise_for_status()
+    result = _parse_json_object(_extract_response_text(response.json()))
+
+    by_id = {candidate["id"]: candidate for candidate in candidates}
+    updated = False
+    for item in result.get("images", []):
+        candidate = by_id.get(str(item.get("id")))
+        if not candidate:
+            continue
+        candidate["view_label"] = normalize_view_label(item.get("view", candidate["view_label"]))
+        candidate["confidence"] = float(item.get("confidence", candidate.get("confidence", 0.5)))
+        candidate["quality"] = float(item.get("quality", candidate.get("quality", 0.5)))
+        candidate["ai_reason"] = str(item.get("reason", ""))
+        candidate["ai_provider"] = "openai"
+        updated = True
+
+    if updated:
+        logger.info(
+            "OpenAI view selector assignment: %s",
+            {
+                candidate["id"]: {
+                    "view": candidate.get("view_label"),
+                    "confidence": candidate.get("confidence"),
+                    "quality": candidate.get("quality"),
+                    "reason": candidate.get("ai_reason", ""),
+                }
+                for candidate in candidates
+            },
+        )
+    return updated
 
 
 def _apply_claude_view_selector(candidates: list[dict]) -> bool:
@@ -344,30 +430,41 @@ def _apply_claude_view_selector(candidates: list[dict]) -> bool:
 
 
 def _apply_view_selector(candidates: list[dict]) -> None:
-    if _apply_claude_view_selector(candidates):
-        return
+    for selector_name, selector in (
+        ("openai", _apply_openai_view_selector),
+        ("claude", _apply_claude_view_selector),
+    ):
+        try:
+            if selector(candidates):
+                return
+        except Exception:
+            logger.exception("View selector '%s' failed; falling back.", selector_name)
 
     if not VIEW_SELECTOR_BASE_URL:
         return
 
-    payload = {
-        "views": [
-            {
-                "id": candidate["id"],
-                "view": candidate["view_label"],
-                "image": encode_image_to_base64(candidate["image"]),
-            }
-            for candidate in candidates
-        ],
-        "target_views": list(CANONICAL_VIEWS),
-    }
-    response = requests.post(
-        f"{VIEW_SELECTOR_BASE_URL}/select-views",
-        json=payload,
-        timeout=120,
-    )
-    response.raise_for_status()
-    result = response.json()
+    try:
+        payload = {
+            "views": [
+                {
+                    "id": candidate["id"],
+                    "view": candidate["view_label"],
+                    "image": encode_image_to_base64(candidate["image"]),
+                }
+                for candidate in candidates
+            ],
+            "target_views": list(CANONICAL_VIEWS),
+        }
+        response = requests.post(
+            f"{VIEW_SELECTOR_BASE_URL}/select-views",
+            json=payload,
+            timeout=120,
+        )
+        response.raise_for_status()
+        result = response.json()
+    except Exception:
+        logger.exception("External view selector failed; falling back.")
+        return
 
     images = result.get("images", [])
     by_id = {candidate["id"]: candidate for candidate in candidates}
@@ -378,6 +475,19 @@ def _apply_view_selector(candidates: list[dict]) -> None:
         candidate["view_label"] = normalize_view_label(item.get("view", candidate["view_label"]))
         candidate["confidence"] = float(item.get("confidence", candidate.get("confidence", 0.5)))
         candidate["quality"] = float(item.get("quality", candidate.get("quality", 0.5)))
+
+
+def _fallback_front_view(candidates: list[dict]) -> Optional[dict]:
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=lambda candidate: (
+            float(candidate.get("quality", 0.5)),
+            float(candidate.get("confidence", 0.5)),
+            -candidate["order"],
+        ),
+    )
 
 
 def _select_canonical_images(candidates: list[dict]) -> dict[str, dict]:
@@ -399,6 +509,17 @@ def _select_canonical_images(candidates: list[dict]) -> dict[str, dict]:
         best = max(view_candidates, key=lambda candidate: _candidate_score(candidate, view))
         selected[view] = best
         used_ids.add(best["id"])
+
+    if not selected:
+        fallback = _fallback_front_view(candidates)
+        if fallback is not None:
+            fallback["view_label"] = "front"
+            fallback["is_exact"] = True
+            selected["front"] = fallback
+            logger.info(
+                "No canonical view was selected; using candidate '%s' as front fallback.",
+                fallback.get("id"),
+            )
 
     return selected
 

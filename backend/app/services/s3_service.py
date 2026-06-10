@@ -4,7 +4,6 @@ from functools import lru_cache
 from typing import Optional
 
 import boto3
-from botocore.exceptions import ClientError
 
 from app.config import settings
 
@@ -19,6 +18,15 @@ def s3_client():
 def source_image_key(user_id: str, source_image_id: str, extension: str) -> str:
     clean_extension = extension.lower().strip().lstrip(".")
     return f"users/{user_id}/source-images/{source_image_id}/input.{clean_extension}"
+
+
+def processed_source_image_key(user_id: str, source_image_id: str, view_label: str) -> str:
+    clean_view = "".join(
+        char for char in view_label.lower().strip() if char.isalnum() or char in {"-", "_"}
+    )
+    if not clean_view:
+        clean_view = "front"
+    return f"users/{user_id}/source-images/{source_image_id}/normalized-{clean_view}.png"
 
 
 def furniture_asset_model_key(user_id: str, asset_id: str) -> str:
@@ -59,16 +67,15 @@ def upload_model_bytes(bucket: str, key: str, data: bytes) -> None:
     )
 
 
+def upload_image_bytes(bucket: str, key: str, data: bytes, content_type: str = "image/png") -> None:
+    s3_client().put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=data,
+        ContentType=content_type,
+    )
+
+
 def download_object_bytes(bucket: str, key: str) -> bytes:
     response = s3_client().get_object(Bucket=bucket, Key=key)
     return response["Body"].read()
-
-
-def head_object_metadata(bucket: str, key: str) -> dict:
-    try:
-        return s3_client().head_object(Bucket=bucket, Key=key)
-    except ClientError as exc:
-        error_code = exc.response.get("Error", {}).get("Code")
-        if error_code in {"404", "NoSuchKey", "NotFound"}:
-            raise FileNotFoundError(f"S3 object not found: s3://{bucket}/{key}") from exc
-        raise
