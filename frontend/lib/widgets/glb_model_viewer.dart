@@ -15,12 +15,28 @@ class GlbModelViewer extends StatefulWidget {
   final String modelUrl;
   final double height;
   final Color backgroundColor;
+  final bool ar;
+  final bool autoRotate;
+  final bool cameraControls;
+  final String? cameraOrbit;
+  final String? fieldOfView;
+  final double borderRadius;
+  final String loadingLabel;
+  final String errorLabel;
 
   const GlbModelViewer({
     super.key,
     required this.modelUrl,
     this.height = 360,
     this.backgroundColor = Colors.transparent,
+    this.ar = true,
+    this.autoRotate = true,
+    this.cameraControls = true,
+    this.cameraOrbit,
+    this.fieldOfView,
+    this.borderRadius = 22,
+    this.loadingLabel = '3D 모델 다운로드 중...',
+    this.errorLabel = '모델을 불러올 수 없어요',
   });
 
   @override
@@ -36,6 +52,14 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
   void initState() {
     super.initState();
     _downloadGlb();
+  }
+
+  @override
+  void didUpdateWidget(covariant GlbModelViewer oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.modelUrl != widget.modelUrl) {
+      _downloadGlb();
+    }
   }
 
   Future<void> _downloadGlb() async {
@@ -75,20 +99,22 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
         child: Container(
           decoration: BoxDecoration(
             color: widget.backgroundColor,
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(widget.borderRadius),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const CircularProgressIndicator(color: AppColors.primary),
-              const Gap(16),
-              Text(
-                '3D 모델 다운로드 중...',
-                style: GoogleFonts.nunito(
-                  color: AppColors.textSecondary,
-                  fontSize: 13,
+              if (widget.loadingLabel.isNotEmpty) ...[
+                const Gap(16),
+                Text(
+                  widget.loadingLabel,
+                  style: GoogleFonts.nunito(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -101,29 +127,31 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
         child: Container(
           decoration: BoxDecoration(
             color: widget.backgroundColor,
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(widget.borderRadius),
           ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               const Icon(Icons.error_outline_rounded,
                   color: AppColors.primary, size: 36),
-              const Gap(12),
-              Text(
-                '모델을 불러올 수 없어요',
-                style: GoogleFonts.nunito(
-                  color: AppColors.textSecondary,
-                  fontSize: 13,
+              if (widget.errorLabel.isNotEmpty) ...[
+                const Gap(12),
+                Text(
+                  widget.errorLabel,
+                  style: GoogleFonts.nunito(
+                    color: AppColors.textSecondary,
+                    fontSize: 13,
+                  ),
                 ),
-              ),
-              const Gap(8),
-              TextButton(
-                onPressed: _downloadGlb,
-                child: Text(
-                  '다시 시도',
-                  style: GoogleFonts.nunito(color: AppColors.primary),
+                const Gap(8),
+                TextButton(
+                  onPressed: _downloadGlb,
+                  child: Text(
+                    '다시 시도',
+                    style: GoogleFonts.nunito(color: AppColors.primary),
+                  ),
                 ),
-              ),
+              ],
             ],
           ),
         ),
@@ -138,9 +166,11 @@ class _GlbModelViewerState extends State<GlbModelViewer> {
       child: ModelViewer(
         src: 'file://$_localFilePath',
         alt: '3D 가구 모델',
-        ar: true,
-        autoRotate: true,
-        cameraControls: true,
+        ar: widget.ar,
+        autoRotate: widget.autoRotate,
+        cameraControls: widget.cameraControls,
+        cameraOrbit: widget.cameraOrbit,
+        fieldOfView: widget.fieldOfView,
         shadowIntensity: 1,
         backgroundColor: widget.backgroundColor,
       ),

@@ -45,7 +45,7 @@ class _ProcessingScreenState extends State<ProcessingScreen>
 
   static const _steps = [
     ('이미지 업로드 완료', 'S3에 원본 이미지를 저장했어요'),
-    ('생성 요청 제출', 'VARCO에 3D 생성을 요청하고 있어요'),
+    ('생성 요청 제출', 'AI 3D 생성 엔진에 요청하고 있어요'),
     ('3D 모델 생성 중', '완료될 때까지 상태를 확인하고 있어요'),
     ('마무리 중', 'GLB 다운로드 링크를 준비하고 있어요'),
   ];
@@ -113,7 +113,7 @@ class _ProcessingScreenState extends State<ProcessingScreen>
                 category: widget.requestedCategory,
                 imagePath: widget.imagePath,
                 dimensions: widget.requestedDimensions,
-                material: 'VARCO GLB',
+                material: 'AI-generated GLB',
                 processingSeconds: DateTime.now()
                     .difference(_startedAt)
                     .inSeconds,
