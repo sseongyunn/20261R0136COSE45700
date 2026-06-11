@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import '../api_client.dart';
 import '../providers/pending_jobs_provider.dart';
 import '../theme/app_theme.dart';
+import '../widgets/glb_model_viewer.dart';
 import 'ar_view_screen.dart';
 import 'upload_screen.dart';
 import 'model_url_screen.dart';
@@ -927,12 +928,35 @@ class _HomeAssetCard extends StatefulWidget {
 
 class _HomeAssetCardState extends State<_HomeAssetCard> {
   bool _openingAR = false;
+  late Future<String> _modelUrlFuture;
+  String? _modelUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _modelUrlFuture = _loadModelUrl();
+  }
+
+  @override
+  void didUpdateWidget(covariant _HomeAssetCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.assetId != widget.asset.assetId) {
+      _modelUrl = null;
+      _modelUrlFuture = _loadModelUrl();
+    }
+  }
+
+  Future<String> _loadModelUrl() async {
+    final url = await context.read<ApiClient>().getModelUrl(widget.asset.assetId);
+    _modelUrl = url;
+    return url;
+  }
 
   Future<void> _openAR() async {
     if (_openingAR) return;
     setState(() => _openingAR = true);
     try {
-      final url = await context.read<ApiClient>().getModelUrl(widget.asset.assetId);
+      final url = _modelUrl ?? await _modelUrlFuture;
       if (!mounted) return;
       Navigator.push(
         context,
@@ -995,22 +1019,10 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
                   Container(
                     width: double.infinity,
                     color: Colors.white.withValues(alpha: 0.4),
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: widget.iconBoxBg,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                            color: Colors.white.withValues(alpha: 0.5),
-                          ),
-                        ),
-                        child: Icon(
-                          Icons.view_in_ar_outlined,
-                          color: widget.highlight,
-                          size: 16,
-                        ),
-                      ),
+                    child: _HomeAssetModelPreview(
+                      modelUrlFuture: _modelUrlFuture,
+                      fallbackColor: widget.highlight,
+                      fallbackBackgroundColor: widget.iconBoxBg,
                     ),
                   ),
                   // AR 버튼 오버레이
@@ -1093,6 +1105,95 @@ class _HomeAssetCardState extends State<_HomeAssetCard> {
               ),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class _HomeAssetModelPreview extends StatelessWidget {
+  final Future<String> modelUrlFuture;
+  final Color fallbackColor;
+  final Color fallbackBackgroundColor;
+
+  const _HomeAssetModelPreview({
+    required this.modelUrlFuture,
+    required this.fallbackColor,
+    required this.fallbackBackgroundColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: modelUrlFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return Center(
+            child: SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 1.8,
+                color: fallbackColor,
+              ),
+            ),
+          );
+        }
+
+        if (!snapshot.hasData || snapshot.hasError) {
+          return _HomeAssetPreviewFallback(
+            color: fallbackColor,
+            backgroundColor: fallbackBackgroundColor,
+          );
+        }
+
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            return GlbModelViewer(
+              modelUrl: snapshot.data!,
+              height: constraints.maxHeight,
+              backgroundColor: Colors.transparent,
+              ar: false,
+              autoRotate: false,
+              cameraControls: false,
+              cameraOrbit: '0deg 75deg 105%',
+              fieldOfView: '30deg',
+              borderRadius: 0,
+              loadingLabel: '',
+              errorLabel: '',
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _HomeAssetPreviewFallback extends StatelessWidget {
+  final Color color;
+  final Color backgroundColor;
+
+  const _HomeAssetPreviewFallback({
+    required this.color,
+    required this.backgroundColor,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Center(
+      child: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: backgroundColor,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: Colors.white.withValues(alpha: 0.5),
+          ),
+        ),
+        child: Icon(
+          Icons.view_in_ar_outlined,
+          color: color,
+          size: 16,
         ),
       ),
     );

@@ -10,6 +10,7 @@ import '../models/pending_generation_job.dart';
 import '../providers/pending_jobs_provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/furni_image.dart';
+import '../widgets/glb_model_viewer.dart';
 import 'model_url_screen.dart';
 import 'processing_screen.dart';
 import 'upload_screen.dart';
@@ -574,12 +575,35 @@ class _AssetCard extends StatefulWidget {
 
 class _AssetCardState extends State<_AssetCard> {
   bool _openingAR = false;
+  late Future<String> _modelUrlFuture;
+  String? _modelUrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _modelUrlFuture = _loadModelUrl();
+  }
+
+  @override
+  void didUpdateWidget(covariant _AssetCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.asset.assetId != widget.asset.assetId) {
+      _modelUrl = null;
+      _modelUrlFuture = _loadModelUrl();
+    }
+  }
+
+  Future<String> _loadModelUrl() async {
+    final url = await context.read<ApiClient>().getModelUrl(widget.asset.assetId);
+    _modelUrl = url;
+    return url;
+  }
 
   Future<void> _openAR() async {
     if (_openingAR) return;
     setState(() => _openingAR = true);
     try {
-      final url = await context.read<ApiClient>().getModelUrl(widget.asset.assetId);
+      final url = _modelUrl ?? await _modelUrlFuture;
       if (!mounted) return;
       Navigator.push(
         context,
@@ -632,21 +656,7 @@ class _AssetCardState extends State<_AssetCard> {
                   Container(
                     width: double.infinity,
                     color: Colors.white.withValues(alpha: 0.05),
-                    child: Center(
-                      child: Container(
-                        padding: const EdgeInsets.all(18),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.1),
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                        ),
-                        child: const Icon(
-                          Icons.view_in_ar_outlined,
-                          color: Colors.white,
-                          size: 32,
-                        ),
-                      ),
-                    ),
+                    child: _AssetModelPreview(modelUrlFuture: _modelUrlFuture),
                   ),
                   // AR 버튼 오버레이
                   Positioned(
@@ -742,6 +752,69 @@ class _AssetCardState extends State<_AssetCard> {
   String _fmt(DateTime? dt) {
     if (dt == null) return '신규';
     return '${dt.year}.${dt.month.toString().padLeft(2, '0')}.${dt.day.toString().padLeft(2, '0')}';
+  }
+}
+
+class _AssetModelPreview extends StatelessWidget {
+  final Future<String> modelUrlFuture;
+
+  const _AssetModelPreview({required this.modelUrlFuture});
+
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder<String>(
+      future: modelUrlFuture,
+      builder: (context, snapshot) {
+        if (snapshot.connectionState != ConnectionState.done) {
+          return Center(
+            child: SizedBox(
+              width: 24,
+              height: 24,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: Colors.white.withValues(alpha: 0.8),
+              ),
+            ),
+          );
+        }
+
+        if (!snapshot.hasData || snapshot.hasError) {
+          return Center(
+            child: Container(
+              padding: const EdgeInsets.all(18),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
+              ),
+              child: const Icon(
+                Icons.view_in_ar_outlined,
+                color: Colors.white,
+                size: 32,
+              ),
+            ),
+          );
+        }
+
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            return GlbModelViewer(
+              modelUrl: snapshot.data!,
+              height: constraints.maxHeight,
+              backgroundColor: Colors.transparent,
+              ar: false,
+              autoRotate: false,
+              cameraControls: false,
+              cameraOrbit: '0deg 75deg 105%',
+              fieldOfView: '30deg',
+              borderRadius: 0,
+              loadingLabel: '',
+              errorLabel: '',
+            );
+          },
+        );
+      },
+    );
   }
 }
 
