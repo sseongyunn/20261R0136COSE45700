@@ -794,6 +794,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
 
   void _onARKitViewCreated(ARKitController controller) {
     _arkitController = controller;
+    controller.addCoachingOverlay(CoachingOverlayGoal.horizontalPlane);
     controller.onAddNodeForAnchor = _onAnchorAdded;
     controller.onUpdateNodeForAnchor = _onAnchorUpdated;
     controller.onDidRemoveNodeForAnchor = _onAnchorRemoved;
@@ -1326,8 +1327,10 @@ class _ArViewScreenState extends State<ArViewScreen> {
   Future<void> _performRaycast() async {
     if (_arkitController == null || !mounted) return;
 
-    final hit = await _hitTestNormalized(0.5, 0.5);
-    final hover = hit ?? await _cameraForwardPreviewPosition();
+    final hit = await _hitTestNormalized(0.5, 0.5, strictPlane: true);
+    final featureHit = await _hitTestNormalized(0.5, 0.5, strictPlane: false);
+    final hover = hit ?? featureHit ?? await _cameraForwardPreviewPosition();
+
     if (!mounted) return;
 
     setState(() {
@@ -1338,17 +1341,27 @@ class _ArViewScreenState extends State<ArViewScreen> {
     await _updatePreviewNode();
   }
 
-  Future<vector.Vector3?> _hitTestNormalized(double x, double y) async {
+  Future<vector.Vector3?> _hitTestNormalized(double x, double y, {bool strictPlane = true}) async {
     final controller = _arkitController;
     if (controller == null) return null;
     final hits = await controller.performHitTest(x: x, y: y);
-    final planeHit = hits.firstWhereOrNull(
-      (hit) =>
-          hit.type == ARKitHitTestResultType.existingPlaneUsingExtent ||
-          hit.type == ARKitHitTestResultType.existingPlaneUsingGeometry,
+    final bestHit = hits.firstWhereOrNull(
+      (hit) {
+        if (strictPlane) {
+          return hit.type == ARKitHitTestResultType.existingPlaneUsingExtent ||
+                 hit.type == ARKitHitTestResultType.existingPlaneUsingGeometry;
+        } else {
+          return (hit.type == ARKitHitTestResultType.existingPlaneUsingExtent ||
+                  hit.type == ARKitHitTestResultType.existingPlaneUsingGeometry ||
+                  hit.type == ARKitHitTestResultType.estimatedHorizontalPlane ||
+                  hit.type == ARKitHitTestResultType.estimatedVerticalPlane ||
+                  hit.type == ARKitHitTestResultType.featurePoint) &&
+                 hit.distance >= 0.3;
+        }
+      },
     );
-    if (planeHit == null) return null;
-    final translation = planeHit.worldTransform.getColumn(3);
+    if (bestHit == null) return null;
+    final translation = bestHit.worldTransform.getColumn(3);
     return vector.Vector3(translation.x, translation.y, translation.z);
   }
 
@@ -1357,6 +1370,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
     return _hitTestNormalized(
       (point.dx / size.width).clamp(0.02, 0.98).toDouble(),
       (point.dy / size.height).clamp(0.02, 0.98).toDouble(),
+      strictPlane: true,
     );
   }
 
@@ -1933,7 +1947,6 @@ class _ArViewScreenState extends State<ArViewScreen> {
             autoenablesDefaultLighting: false,
             enableTapRecognizer: false,
             enablePanRecognizer: false,
-            showFeaturePoints: false,
             onARKitViewCreated: _onARKitViewCreated,
           ),
           Positioned.fill(
@@ -1946,6 +1959,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
               onPanCancel: _handleScenePanEnd,
             ),
           ),
+
           Positioned(
             top: 0,
             left: 0,
