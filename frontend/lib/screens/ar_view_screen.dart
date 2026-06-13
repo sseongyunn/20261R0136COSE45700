@@ -112,6 +112,9 @@ class _ArViewScreenState extends State<ArViewScreen> {
   String? _statusMessage;
   bool _showDragHint = false;
 
+  // 디버그용: 3x3 화면 분할 9개 지점의 특징점 거리
+  List<double?> _gridDistances = List.filled(9, null);
+
   _ArAsset? _activeAsset;
 
   bool get _planeDetected => _planeAnchorIds.isNotEmpty;
@@ -1330,6 +1333,16 @@ class _ArViewScreenState extends State<ArViewScreen> {
     final hit = await _hitTestNormalized(0.5, 0.5, strictPlane: true);
     final featureHit = await _hitTestNormalized(0.5, 0.5, strictPlane: false);
     final hover = hit ?? featureHit ?? await _cameraForwardPreviewPosition();
+    
+    // 디버그 측정: 3x3 지점 특징점 깊이 확인
+    final coords = [
+      (0.2, 0.2), (0.5, 0.2), (0.8, 0.2),
+      (0.2, 0.5), (0.5, 0.5), (0.8, 0.5),
+      (0.2, 0.8), (0.5, 0.8), (0.8, 0.8),
+    ];
+    final distances = await Future.wait(
+      coords.map((c) => _hitTestFeaturePointDistance(c.$1, c.$2)),
+    );
 
     if (!mounted) return;
 
@@ -1337,6 +1350,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
       _reticlePosition = hit;
       _previewPosition = hover;
       _placementEligible = hit != null;
+      _gridDistances = distances;
     });
     await _updatePreviewNode();
   }
@@ -1363,6 +1377,22 @@ class _ArViewScreenState extends State<ArViewScreen> {
     if (bestHit == null) return null;
     final translation = bestHit.worldTransform.getColumn(3);
     return vector.Vector3(translation.x, translation.y, translation.z);
+  }
+
+  Future<double?> _hitTestFeaturePointDistance(double x, double y) async {
+    final controller = _arkitController;
+    if (controller == null) return null;
+    final hits = await controller.performHitTest(x: x, y: y);
+    final bestHit = hits.firstWhereOrNull(
+      (hit) =>
+          (hit.type == ARKitHitTestResultType.existingPlaneUsingExtent ||
+           hit.type == ARKitHitTestResultType.existingPlaneUsingGeometry ||
+           hit.type == ARKitHitTestResultType.estimatedHorizontalPlane ||
+           hit.type == ARKitHitTestResultType.estimatedVerticalPlane ||
+           hit.type == ARKitHitTestResultType.featurePoint) &&
+          hit.distance >= 0.3,
+    );
+    return bestHit?.distance;
   }
 
   Future<vector.Vector3?> _hitTestScreenPoint(Offset point) {
@@ -1947,6 +1977,7 @@ class _ArViewScreenState extends State<ArViewScreen> {
             autoenablesDefaultLighting: false,
             enableTapRecognizer: false,
             enablePanRecognizer: false,
+            showFeaturePoints: true, // 디버그: 특징점 표시
             onARKitViewCreated: _onARKitViewCreated,
           ),
           Positioned.fill(
@@ -1959,7 +1990,11 @@ class _ArViewScreenState extends State<ArViewScreen> {
               onPanCancel: _handleScenePanEnd,
             ),
           ),
-
+          Positioned.fill(
+            child: IgnorePointer(
+              child: _GridDistanceOverlay(distances: _gridDistances),
+            ),
+          ),
           Positioned(
             top: 0,
             left: 0,
@@ -3368,6 +3403,59 @@ class _DragHintOverlayState extends State<_DragHintOverlay>
           ),
         ),
       ),
+    );
+  }
+}
+
+class _GridDistanceOverlay extends StatelessWidget {
+  final List<double?> distances;
+
+  const _GridDistanceOverlay({required this.distances});
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth;
+        final h = constraints.maxHeight;
+        final points = [
+          Offset(w * 0.2, h * 0.2), Offset(w * 0.5, h * 0.2), Offset(w * 0.8, h * 0.2),
+          Offset(w * 0.2, h * 0.5), Offset(w * 0.5, h * 0.5), Offset(w * 0.8, h * 0.5),
+          Offset(w * 0.2, h * 0.8), Offset(w * 0.5, h * 0.8), Offset(w * 0.8, h * 0.8),
+        ];
+
+        return Stack(
+          children: List.generate(9, (index) {
+            final pt = points[index];
+            final dist = distances[index];
+            final bool isOutlier = dist == null;
+            final text = isOutlier ? '[스캔 부족]' : '${dist.toStringAsFixed(2)}m';
+            final color = isOutlier ? Colors.redAccent : Colors.greenAccent;
+            return Positioned(
+              left: pt.dx - 40,
+              top: pt.dy - 20,
+              width: 80,
+              height: 40,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.add, color: color, size: 16),
+                  Text(
+                    text,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                      shadows: const [Shadow(color: Colors.black, blurRadius: 4)],
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            );
+          }),
+        );
+      },
     );
   }
 }
